@@ -232,6 +232,7 @@ export default function App() {
         <div className="login-card">
           <div className="brand-mark">S</div>
           <h1>Setu</h1>
+          <p className="brand-tag login-tag">A brac IT platform</p>
           <p className="login-sub">Choose an account to start chatting</p>
           {error && <div className="alert error">{error}</div>}
           <ul className="account-list">
@@ -264,7 +265,10 @@ export default function App() {
         <div className="sidebar-top">
           <div className="brand">
             <span className="brand-mark small">S</span>
-            <span className="brand-name">Setu</span>
+            <span className="brand-wordmark">
+              <span className="brand-name">Setu</span>
+              <span className="brand-tag">brac IT</span>
+            </span>
           </div>
 
           <button
