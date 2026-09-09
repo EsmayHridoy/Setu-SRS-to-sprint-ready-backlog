@@ -159,22 +159,24 @@ export default function App() {
   }
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: 16, maxWidth: 960 }}>
-      <h1>Setu API Client</h1>
-      <p>API: {API_BASE}</p>
+    <div className="app">
+      <header className="app-header">
+        <h1>Setu API Client</h1>
+        <p className="api-base">API: {API_BASE}</p>
+      </header>
 
       {error && (
-        <p style={{ color: 'crimson' }}>
+        <div className="alert error">
           <strong>Error:</strong> {error}
-        </p>
+        </div>
       )}
-      {loading && <p>Loading…</p>}
+      {loading && <div className="alert loading">Loading…</div>}
 
       {/* Account picker */}
-      <section>
+      <section className="card">
         <h2>1. Select account</h2>
         {!userId ? (
-          <ul>
+          <ul className="account-list">
             {accounts.map((a) => (
               <li key={a.id}>
                 <button type="button" onClick={() => setUserId(a.id)}>
@@ -184,10 +186,12 @@ export default function App() {
             ))}
           </ul>
         ) : (
-          <p>
-            Signed in as <strong>{session?.user?.name || userId}</strong>
-            {session?.is_admin ? ' [admin]' : ''}{' '}
-            <button type="button" onClick={logout}>
+          <p className="signed-in">
+            <span>
+              Signed in as <strong>{session?.user?.name || userId}</strong>
+            </span>
+            {session?.is_admin && <span className="badge">admin</span>}
+            <button type="button" className="ghost" onClick={logout}>
               Switch user
             </button>
           </p>
@@ -196,13 +200,18 @@ export default function App() {
 
       {session && (
         <>
-          <nav>
-            <button type="button" onClick={() => setTab('chat')}>
+          <nav className="tabs">
+            <button
+              type="button"
+              className={tab === 'chat' ? 'active' : ''}
+              onClick={() => setTab('chat')}
+            >
               Chat
             </button>
             {session.is_admin && (
               <button
                 type="button"
+                className={tab === 'admin' ? 'active' : ''}
                 onClick={() => {
                   setTab('admin');
                   loadAdmin();
@@ -214,11 +223,11 @@ export default function App() {
           </nav>
 
           {tab === 'chat' && (
-            <section>
+            <section className="card">
               <h2>2. Chat</h2>
 
-              <label>
-                Project:{' '}
+              <label className="field">
+                Project
                 <select
                   value={projectId}
                   onChange={(e) => {
@@ -235,38 +244,60 @@ export default function App() {
                 </select>
               </label>
 
-              <div style={{ marginTop: 8 }}>
+              <div className="btn-row">
                 <button type="button" onClick={() => loadConversations()}>
                   Refresh conversations
-                </button>{' '}
-                <button type="button" onClick={createConversation} disabled={!projectId}>
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={createConversation}
+                  disabled={!projectId}
+                >
                   New conversation
                 </button>
               </div>
 
               <h3>Conversations</h3>
-              <ul>
-                {conversations.map((c) => (
-                  <li key={c.id}>
-                    <button type="button" onClick={() => openConversation(c.id)}>
-                      {c.title || 'Untitled'} — {c.project_name}
-                    </button>{' '}
-                    <button type="button" onClick={() => deleteConversation(c.id)}>
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {conversations.length === 0 ? (
+                <p className="empty">No conversations yet.</p>
+              ) : (
+                <ul className="conv-list">
+                  {conversations.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        className="conv-open"
+                        onClick={() => openConversation(c.id)}
+                      >
+                        <span className="conv-title">{c.title || 'Untitled'}</span>{' '}
+                        <span className="conv-project">— {c.project_name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => deleteConversation(c.id)}
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
               {activeConversation && (
-                <div>
-                  <h3>{activeConversation.title || 'Conversation'}</h3>
-                  <div>
+                <div className="thread">
+                  <h3 className="thread-title">
+                    {activeConversation.title || 'Conversation'}
+                  </h3>
+                  <div className="messages">
                     {(activeConversation.messages || []).map((m) => (
-                      <div key={m.id} style={{ marginBottom: 12, borderBottom: '1px solid #ccc' }}>
-                        <strong>{m.role}</strong>
-                        {m.is_placeholder ? ' (placeholder)' : ''}
-                        <pre style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{m.content}</pre>
+                      <div key={m.id} className={`msg ${m.role === 'user' ? 'user' : ''}`}>
+                        <div className="msg-head">
+                          <span className="msg-role">{m.role}</span>
+                          {m.is_placeholder && <span className="pill">placeholder</span>}
+                        </div>
+                        <pre>{m.content}</pre>
                         {m.citations?.length > 0 && (
                           <details>
                             <summary>Citations ({m.citations.length})</summary>
@@ -284,15 +315,18 @@ export default function App() {
                     ))}
                   </div>
 
-                  <form onSubmit={sendMessage}>
+                  <form className="composer" onSubmit={sendMessage}>
                     <textarea
                       rows={3}
-                      style={{ width: '100%' }}
                       value={messageText}
                       onChange={(e) => setMessageText(e.target.value)}
                       placeholder="Ask something…"
                     />
-                    <button type="submit" disabled={!messageText.trim() || loading}>
+                    <button
+                      type="submit"
+                      className="primary"
+                      disabled={!messageText.trim() || loading}
+                    >
                       Send
                     </button>
                   </form>
@@ -302,27 +336,36 @@ export default function App() {
           )}
 
           {tab === 'admin' && session.is_admin && (
-            <section>
+            <section className="card">
               <h2>Admin</h2>
-              <button type="button" onClick={loadAdmin}>
-                Refresh admin data
-              </button>
+              <div className="btn-row">
+                <button type="button" onClick={loadAdmin}>
+                  Refresh admin data
+                </button>
+              </div>
 
               <h3>Roles ({adminRoles.length})</h3>
-              <ul>
+              <ul className="data-list">
                 {adminRoles.map((r) => (
                   <li key={r.id}>
-                    {r.name} {r.is_admin ? '[admin]' : ''} — users: {r.user_count} — projects:{' '}
-                    {r.projects?.map((p) => p.name).join(', ') || 'none'}
+                    <span className="grow">
+                      <strong>{r.name}</strong>{' '}
+                      {r.is_admin && <span className="badge">admin</span>} — users:{' '}
+                      {r.user_count} — projects:{' '}
+                      {r.projects?.map((p) => p.name).join(', ') || 'none'}
+                    </span>
                   </li>
                 ))}
               </ul>
 
               <h3>Projects ({adminProjects.length})</h3>
-              <ul>
+              <ul className="data-list">
                 {adminProjects.map((p) => (
                   <li key={p.id}>
-                    {p.name} [{p.status}] {p.provider} — artifacts: {p.artifact_count}{' '}
+                    <span className="grow">
+                      <strong>{p.name}</strong> <span className="pill">{p.status}</span>{' '}
+                      {p.provider} — artifacts: {p.artifact_count}
+                    </span>
                     <button
                       type="button"
                       onClick={async () => {
@@ -341,17 +384,20 @@ export default function App() {
               </ul>
 
               <h3>Users ({adminUsers.length})</h3>
-              <ul>
+              <ul className="data-list">
                 {adminUsers.map((u) => (
                   <li key={u.id}>
-                    {u.name} ({u.email}) — {u.roles?.map((r) => r.name).join(', ')}
-                    {!u.is_active ? ' [inactive]' : ''}
+                    <span className="grow">
+                      <strong>{u.name}</strong> ({u.email}) —{' '}
+                      {u.roles?.map((r) => r.name).join(', ')}
+                    </span>
+                    {!u.is_active && <span className="badge muted">inactive</span>}
                   </li>
                 ))}
               </ul>
 
               <h3>Audit (latest)</h3>
-              <ul>
+              <ul className="data-list audit">
                 {adminAudit.map((a) => (
                   <li key={a.id}>
                     {a.occurred_at}: {a.actor_name} {a.action} {a.entity_type} — {a.detail}
