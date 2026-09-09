@@ -32,6 +32,64 @@ async function request(path, { method = 'GET', userId, body } = {}) {
   return data;
 }
 
+async function streamSSE(path, userId, body, handlers, signal) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: headers(userId, true),
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    let detail = text;
+    try {
+      detail = JSON.parse(text)?.detail || text;
+    } catch {
+      /* keep raw text */
+    }
+    throw new Error(`${res.status}: ${detail || res.statusText}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  // SSE frames are separated by a blank line. Buffer partial reads until we
+  // have a whole frame, then parse its `event:` and `data:` lines.
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      let event = 'message';
+      const dataLines = [];
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) continue;
+
+      let data;
+      try {
+        data = JSON.parse(dataLines.join('\n'));
+      } catch {
+        continue;
+      }
+
+      if (event === 'start') handlers.onStart?.(data);
+      else if (event === 'delta') handlers.onDelta?.(data.text);
+      else if (event === 'done') handlers.onDone?.(data);
+      else if (event === 'error') throw new Error(data.detail || 'Stream error');
+    }
+  }
+}
+
 export const api = {
   health: () => request('/api/health'),
 
@@ -58,6 +116,13 @@ export const api = {
       userId,
       body: { content },
     }),
+
+  // Streaming reply over Server-Sent Events. Calls the handlers as frames
+  // arrive: onStart({ conversation, user_message, reply_id }), onDelta(text),
+  // onDone({ conversation, reply }). Returns a promise that resolves when the
+  // stream ends. Pass `signal` (an AbortSignal) to cancel.
+  streamMessage: (userId, conversationId, content, handlers = {}, signal) =>
+    streamSSE(`/api/conversations/${conversationId}/messages/stream`, userId, { content }, handlers, signal),
 
   // Admin
   admin: {

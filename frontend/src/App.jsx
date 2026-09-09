@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, API_BASE } from './api';
 
 const STORAGE_KEY = 'setu_user_id';
@@ -14,6 +14,7 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messageText, setMessageText] = useState('');
+  const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('chat'); // chat | admin
 
   // Admin state
@@ -21,6 +22,8 @@ export default function App() {
   const [adminProjects, setAdminProjects] = useState([]);
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminAudit, setAdminAudit] = useState([]);
+
+  const threadEndRef = useRef(null);
 
   useEffect(() => {
     api
@@ -41,6 +44,12 @@ export default function App() {
   useEffect(() => {
     if (userId && projectId) loadConversations(projectId);
   }, [userId, projectId]);
+
+  const msgs = activeConversation?.messages;
+  const lastMsg = msgs?.[msgs.length - 1];
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [msgs?.length, lastMsg?.content]);
 
   async function loadSession(id) {
     setLoading(true);
@@ -108,22 +117,54 @@ export default function App() {
 
   async function sendMessage(e) {
     e.preventDefault();
-    if (!activeConversation || !messageText.trim()) return;
+    if (!activeConversation || !messageText.trim() || streaming) return;
+    const text = messageText.trim();
+    const convId = activeConversation.id;
+    const tempUserId = `tmp-u-${Date.now()}`;
+    const tempReplyId = `tmp-a-${Date.now()}`;
+
     setError('');
-    setLoading(true);
+    setMessageText('');
+    setStreaming(true);
+
+    // Optimistically show the question and an empty assistant bubble that the
+    // stream fills in token by token.
+    setActiveConversation((prev) => ({
+      ...prev,
+      messages: [
+        ...(prev.messages || []),
+        { id: tempUserId, role: 'USER', content: text, citations: [] },
+        { id: tempReplyId, role: 'ASSISTANT', content: '', citations: [], streaming: true },
+      ],
+    }));
+
+    const patch = (id, fn) =>
+      setActiveConversation((prev) => {
+        if (!prev || prev.id !== convId) return prev;
+        return { ...prev, messages: prev.messages.map((m) => (m.id === id ? fn(m) : m)) };
+      });
+
     try {
-      const result = await api.sendMessage(userId, activeConversation.id, messageText.trim());
-      setMessageText('');
-      setActiveConversation((prev) => ({
-        ...prev,
-        ...result.conversation,
-        messages: [...(prev.messages || []), result.user_message, result.reply],
-      }));
+      await api.streamMessage(userId, convId, text, {
+        onStart: (data) => patch(tempUserId, () => data.user_message),
+        onDelta: (chunk) => patch(tempReplyId, (m) => ({ ...m, content: m.content + chunk })),
+        onDone: (data) => {
+          patch(tempReplyId, () => ({ ...data.reply, streaming: false }));
+          setActiveConversation((prev) =>
+            prev && prev.id === convId ? { ...prev, ...data.conversation } : prev,
+          );
+        },
+      });
       await loadConversations();
-    } catch (e) {
-      setError(e.message);
+    } catch (err) {
+      setError(err.message);
+      // Drop the empty assistant shell so a failed turn leaves no ghost bubble.
+      setActiveConversation((prev) => {
+        if (!prev || prev.id !== convId) return prev;
+        return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
+      });
     } finally {
-      setLoading(false);
+      setStreaming(false);
     }
   }
 
@@ -158,256 +199,735 @@ export default function App() {
     setTab('chat');
   }
 
-  return (
-    <div className="app">
-      <header className="app-header">
-        <h1>Setu API Client</h1>
-        <p className="api-base">API: {API_BASE}</p>
-      </header>
+  function onComposerKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(e);
+    }
+  }
 
-      {error && (
-        <div className="alert error">
-          <strong>Error:</strong> {error}
-        </div>
-      )}
-      {loading && <div className="alert loading">Loading…</div>}
-
-      {/* Account picker */}
-      <section className="card">
-        <h2>1. Select account</h2>
-        {!userId ? (
+  // ---------- Login screen ----------
+  if (!userId) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <div className="brand-mark">S</div>
+          <h1>Setu</h1>
+          <p className="login-sub">Choose an account to start chatting</p>
+          {error && <div className="alert error">{error}</div>}
           <ul className="account-list">
             {accounts.map((a) => (
               <li key={a.id}>
                 <button type="button" onClick={() => setUserId(a.id)}>
-                  {a.name} ({a.email}) — {a.roles?.map((r) => r.name).join(', ')}
+                  <span className="acct-avatar">{(a.name || '?').charAt(0)}</span>
+                  <span className="acct-body">
+                    <span className="acct-name">{a.name}</span>
+                    <span className="acct-meta">
+                      {a.email} · {a.roles?.map((r) => r.name).join(', ')}
+                    </span>
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
-        ) : (
-          <p className="signed-in">
-            <span>
-              Signed in as <strong>{session?.user?.name || userId}</strong>
-            </span>
-            {session?.is_admin && <span className="badge">admin</span>}
-            <button type="button" className="ghost" onClick={logout}>
-              Switch user
-            </button>
-          </p>
-        )}
-      </section>
+          <p className="api-base">{API_BASE}</p>
+        </div>
+      </div>
+    );
+  }
 
-      {session && (
-        <>
-          <nav className="tabs">
+  const messages = activeConversation?.messages || [];
+
+  return (
+    <div className="layout">
+      {/* ---------- Sidebar ---------- */}
+      <aside className="sidebar">
+        <div className="sidebar-top">
+          <div className="brand">
+            <span className="brand-mark small">S</span>
+            <span className="brand-name">Setu</span>
+          </div>
+
+          <button
+            type="button"
+            className="new-chat"
+            onClick={createConversation}
+            disabled={!projectId}
+          >
+            <PlusIcon />
+            New chat
+          </button>
+
+          <label className="field">
+            <span className="field-label">Project</span>
+            <select
+              value={projectId}
+              onChange={(e) => {
+                setProjectId(e.target.value);
+                setActiveConversation(null);
+              }}
+            >
+              <option value="">— select —</option>
+              {session?.projects?.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="conv-scroll">
+          <div className="conv-heading">Chats</div>
+          {conversations.length === 0 ? (
+            <p className="empty">No conversations yet</p>
+          ) : (
+            <ul className="conv-list">
+              {conversations.map((c) => (
+                <li
+                  key={c.id}
+                  className={activeConversation?.id === c.id ? 'active' : ''}
+                >
+                  <button
+                    type="button"
+                    className="conv-open"
+                    onClick={() => openConversation(c.id)}
+                    title={c.title || 'Untitled'}
+                  >
+                    {c.title || 'Untitled'}
+                  </button>
+                  <button
+                    type="button"
+                    className="conv-del"
+                    onClick={() => deleteConversation(c.id)}
+                    title="Delete"
+                  >
+                    <TrashIcon />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="sidebar-bottom">
+          {session?.is_admin && (
             <button
               type="button"
-              className={tab === 'chat' ? 'active' : ''}
-              onClick={() => setTab('chat')}
-            >
-              Chat
-            </button>
-            {session.is_admin && (
-              <button
-                type="button"
-                className={tab === 'admin' ? 'active' : ''}
-                onClick={() => {
+              className={`side-link ${tab === 'admin' ? 'active' : ''}`}
+              onClick={() => {
+                if (tab === 'admin') {
+                  setTab('chat');
+                } else {
                   setTab('admin');
                   loadAdmin();
-                }}
-              >
-                Admin
-              </button>
-            )}
-          </nav>
+                }
+              }}
+            >
+              <GearIcon />
+              {tab === 'admin' ? 'Back to chat' : 'Admin'}
+            </button>
+          )}
+          <div className="user-chip">
+            <span className="acct-avatar sm">
+              {(session?.user?.name || '?').charAt(0)}
+            </span>
+            <span className="user-chip-body">
+              <span className="user-chip-name">
+                {session?.user?.name || userId}
+                {session?.is_admin && <span className="badge">admin</span>}
+              </span>
+            </span>
+            <button type="button" className="side-link tiny" onClick={logout}>
+              Switch
+            </button>
+          </div>
+        </div>
+      </aside>
 
-          {tab === 'chat' && (
-            <section className="card">
-              <h2>2. Chat</h2>
+      {/* ---------- Main ---------- */}
+      <main className="main">
+        {error && <div className="alert error floating">{error}</div>}
 
-              <label className="field">
-                Project
-                <select
-                  value={projectId}
-                  onChange={(e) => {
-                    setProjectId(e.target.value);
-                    setActiveConversation(null);
-                  }}
-                >
-                  <option value="">— select —</option>
-                  {session.projects?.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="btn-row">
-                <button type="button" onClick={() => loadConversations()}>
-                  Refresh conversations
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={createConversation}
-                  disabled={!projectId}
-                >
-                  New conversation
-                </button>
+        {tab === 'admin' && session?.is_admin ? (
+          <AdminView
+            userId={userId}
+            loading={loading}
+            onRefresh={loadAdmin}
+            onError={setError}
+            roles={adminRoles}
+            projects={adminProjects}
+            users={adminUsers}
+            audit={adminAudit}
+          />
+        ) : activeConversation ? (
+          <>
+            <div className="thread">
+              <div className="thread-inner">
+                {messages.map((m) => (
+                  <Message key={m.id} m={m} />
+                ))}
+                <div ref={threadEndRef} />
               </div>
+            </div>
+            <Composer
+              value={messageText}
+              onChange={setMessageText}
+              onSubmit={sendMessage}
+              onKeyDown={onComposerKeyDown}
+              disabled={streaming}
+            />
+          </>
+        ) : (
+          <div className="welcome">
+            <div className="welcome-inner">
+              <div className="brand-mark">S</div>
+              <h2>How can I help you today?</h2>
+              <p className="welcome-sub">
+                {projectId
+                  ? 'Start a new chat or pick a conversation from the sidebar.'
+                  : 'Select a project to begin.'}
+              </p>
+              <Composer
+                value={messageText}
+                onChange={setMessageText}
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!projectId) {
+                    setError('Select a project first');
+                    return;
+                  }
+                  const text = messageText;
+                  await createConversation();
+                  setMessageText(text);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (projectId) createConversation();
+                  }
+                }}
+                disabled={!projectId || loading}
+                placeholder={projectId ? 'Message Setu…' : 'Select a project first'}
+                centered
+              />
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
 
-              <h3>Conversations</h3>
-              {conversations.length === 0 ? (
-                <p className="empty">No conversations yet.</p>
-              ) : (
-                <ul className="conv-list">
-                  {conversations.map((c) => (
+function Message({ m }) {
+  const isUser = m.role?.toLowerCase() === 'user';
+  const isEmpty = !m.content;
+  return (
+    <div className={`msg ${isUser ? 'user' : 'assistant'}`}>
+      {!isUser && <div className="msg-avatar">S</div>}
+      <div className="msg-body">
+        {isUser ? (
+          <div className="bubble">{m.content}</div>
+        ) : m.streaming && isEmpty ? (
+          <div className="typing">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        ) : (
+          <>
+            <div className="msg-text">
+              {m.content}
+              {m.streaming && <span className="caret" />}
+              {m.is_placeholder && !m.streaming && <span className="pill"> placeholder</span>}
+            </div>
+            {m.citations?.length > 0 && (
+              <details className="citations">
+                <summary>{m.citations.length} citations</summary>
+                <ul>
+                  {m.citations.map((c) => (
                     <li key={c.id}>
-                      <button
-                        type="button"
-                        className="conv-open"
-                        onClick={() => openConversation(c.id)}
-                      >
-                        <span className="conv-title">{c.title || 'Untitled'}</span>{' '}
-                        <span className="conv-project">— {c.project_name}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => deleteConversation(c.id)}
-                      >
-                        Delete
-                      </button>
+                      <span className="pill">{c.kind}</span> {c.source_ref}
+                      {c.quoted_span ? `: ${c.quoted_span}` : ''}
                     </li>
                   ))}
                 </ul>
-              )}
+              </details>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
-              {activeConversation && (
-                <div className="thread">
-                  <h3 className="thread-title">
-                    {activeConversation.title || 'Conversation'}
-                  </h3>
-                  <div className="messages">
-                    {(activeConversation.messages || []).map((m) => (
-                      <div key={m.id} className={`msg ${m.role === 'user' ? 'user' : ''}`}>
-                        <div className="msg-head">
-                          <span className="msg-role">{m.role}</span>
-                          {m.is_placeholder && <span className="pill">placeholder</span>}
-                        </div>
-                        <pre>{m.content}</pre>
-                        {m.citations?.length > 0 && (
-                          <details>
-                            <summary>Citations ({m.citations.length})</summary>
-                            <ul>
-                              {m.citations.map((c) => (
-                                <li key={c.id}>
-                                  [{c.kind}] {c.source_ref}
-                                  {c.quoted_span ? `: ${c.quoted_span}` : ''}
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+function Composer({ value, onChange, onSubmit, onKeyDown, disabled, placeholder, centered }) {
+  return (
+    <div className={`composer-wrap ${centered ? 'centered' : ''}`}>
+      <form className="composer" onSubmit={onSubmit}>
+        <textarea
+          rows={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder || 'Message Setu…'}
+        />
+        <button
+          type="submit"
+          className="send-btn"
+          disabled={!value.trim() || disabled}
+          title="Send"
+        >
+          <ArrowUpIcon />
+        </button>
+      </form>
+      <p className="composer-hint">Press Enter to send · Shift+Enter for a new line</p>
+    </div>
+  );
+}
 
-                  <form className="composer" onSubmit={sendMessage}>
-                    <textarea
-                      rows={3}
-                      value={messageText}
-                      onChange={(e) => setMessageText(e.target.value)}
-                      placeholder="Ask something…"
-                    />
-                    <button
-                      type="submit"
-                      className="primary"
-                      disabled={!messageText.trim() || loading}
-                    >
-                      Send
-                    </button>
-                  </form>
-                </div>
-              )}
-            </section>
+function AdminView({ userId, loading, onRefresh, onError, roles, projects, users, audit }) {
+  // modal = { type: 'role' | 'project' | 'user', entity: object | null }
+  const [modal, setModal] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const close = () => setModal(null);
+
+  async function remove(kind, entity) {
+    const label = entity.name || entity.email;
+    if (!window.confirm(`Delete ${kind} “${label}”? This cannot be undone.`)) return;
+    onError('');
+    try {
+      if (kind === 'role') await api.admin.deleteRole(userId, entity.id);
+      else if (kind === 'project') await api.admin.deleteProject(userId, entity.id);
+      else await api.admin.deleteUser(userId, entity.id);
+      await onRefresh();
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  async function reindex(id) {
+    onError('');
+    try {
+      await api.admin.reindexProject(userId, id);
+      await onRefresh();
+    } catch (e) {
+      onError(e.message);
+    }
+  }
+
+  async function submit(payload) {
+    setBusy(true);
+    // Any thrown error propagates to FormShell, which keeps the modal open and
+    // shows it; the `finally` still clears the busy flag.
+    try {
+      const { type, entity } = modal;
+      const id = entity?.id;
+      if (type === 'role') {
+        if (id) await api.admin.updateRole(userId, id, payload);
+        else await api.admin.createRole(userId, payload);
+      } else if (type === 'project') {
+        if (id) await api.admin.updateProject(userId, id, payload);
+        else await api.admin.createProject(userId, payload);
+      } else {
+        if (id) await api.admin.updateUser(userId, id, payload);
+        else await api.admin.createUser(userId, payload);
+      }
+      close();
+      await onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="admin">
+      <div className="admin-inner">
+        <div className="admin-head">
+          <h2>Admin</h2>
+          <button type="button" onClick={onRefresh} disabled={loading}>
+            Refresh
+          </button>
+        </div>
+
+        <div className="section-head">
+          <h3>Roles ({roles.length})</h3>
+          <button type="button" className="new-btn" onClick={() => setModal({ type: 'role', entity: null })}>
+            <PlusIcon /> New role
+          </button>
+        </div>
+        <ul className="data-list">
+          {roles.map((r) => (
+            <li key={r.id}>
+              <span className="grow">
+                <strong>{r.name}</strong> {r.is_admin && <span className="badge">admin</span>} —
+                users: {r.user_count} — projects:{' '}
+                {r.projects?.map((p) => p.name).join(', ') || 'none'}
+              </span>
+              <button type="button" onClick={() => setModal({ type: 'role', entity: r })}>
+                Edit
+              </button>
+              <button type="button" className="danger-btn" onClick={() => remove('role', r)}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div className="section-head">
+          <h3>Projects ({projects.length})</h3>
+          <button type="button" className="new-btn" onClick={() => setModal({ type: 'project', entity: null })}>
+            <PlusIcon /> New project
+          </button>
+        </div>
+        <ul className="data-list">
+          {projects.map((p) => (
+            <li key={p.id}>
+              <span className="grow">
+                <strong>{p.name}</strong> <span className="pill">{p.status}</span> {p.provider} —
+                artifacts: {p.artifact_count}
+                {p.token_last4 && <span className="pill"> token ••{p.token_last4}</span>}
+              </span>
+              <button type="button" onClick={() => reindex(p.id)}>
+                Reindex
+              </button>
+              <button type="button" onClick={() => setModal({ type: 'project', entity: p })}>
+                Edit
+              </button>
+              <button type="button" className="danger-btn" onClick={() => remove('project', p)}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div className="section-head">
+          <h3>Users ({users.length})</h3>
+          <button type="button" className="new-btn" onClick={() => setModal({ type: 'user', entity: null })}>
+            <PlusIcon /> New user
+          </button>
+        </div>
+        <ul className="data-list">
+          {users.map((u) => (
+            <li key={u.id}>
+              <span className="grow">
+                <strong>{u.name}</strong> ({u.email}) — {u.roles?.map((r) => r.name).join(', ') || 'no roles'}
+              </span>
+              {!u.is_active && <span className="badge muted">inactive</span>}
+              <button type="button" onClick={() => setModal({ type: 'user', entity: u })}>
+                Edit
+              </button>
+              <button type="button" className="danger-btn" onClick={() => remove('user', u)}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <h3>Audit (latest)</h3>
+        <ul className="data-list audit">
+          {audit.map((a) => (
+            <li key={a.id}>
+              {a.occurred_at}: {a.actor_name} {a.action} {a.entity_type} — {a.detail}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {modal && (
+        <Modal
+          title={`${modal.entity ? 'Edit' : 'New'} ${modal.type}`}
+          onClose={close}
+        >
+          {modal.type === 'role' && (
+            <RoleForm entity={modal.entity} projects={projects} busy={busy} onSubmit={submit} onCancel={close} />
           )}
-
-          {tab === 'admin' && session.is_admin && (
-            <section className="card">
-              <h2>Admin</h2>
-              <div className="btn-row">
-                <button type="button" onClick={loadAdmin}>
-                  Refresh admin data
-                </button>
-              </div>
-
-              <h3>Roles ({adminRoles.length})</h3>
-              <ul className="data-list">
-                {adminRoles.map((r) => (
-                  <li key={r.id}>
-                    <span className="grow">
-                      <strong>{r.name}</strong>{' '}
-                      {r.is_admin && <span className="badge">admin</span>} — users:{' '}
-                      {r.user_count} — projects:{' '}
-                      {r.projects?.map((p) => p.name).join(', ') || 'none'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-
-              <h3>Projects ({adminProjects.length})</h3>
-              <ul className="data-list">
-                {adminProjects.map((p) => (
-                  <li key={p.id}>
-                    <span className="grow">
-                      <strong>{p.name}</strong> <span className="pill">{p.status}</span>{' '}
-                      {p.provider} — artifacts: {p.artifact_count}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await api.admin.reindexProject(userId, p.id);
-                          loadAdmin();
-                        } catch (e) {
-                          setError(e.message);
-                        }
-                      }}
-                    >
-                      Reindex
-                    </button>
-                  </li>
-                ))}
-              </ul>
-
-              <h3>Users ({adminUsers.length})</h3>
-              <ul className="data-list">
-                {adminUsers.map((u) => (
-                  <li key={u.id}>
-                    <span className="grow">
-                      <strong>{u.name}</strong> ({u.email}) —{' '}
-                      {u.roles?.map((r) => r.name).join(', ')}
-                    </span>
-                    {!u.is_active && <span className="badge muted">inactive</span>}
-                  </li>
-                ))}
-              </ul>
-
-              <h3>Audit (latest)</h3>
-              <ul className="data-list audit">
-                {adminAudit.map((a) => (
-                  <li key={a.id}>
-                    {a.occurred_at}: {a.actor_name} {a.action} {a.entity_type} — {a.detail}
-                  </li>
-                ))}
-              </ul>
-            </section>
+          {modal.type === 'project' && (
+            <ProjectForm entity={modal.entity} busy={busy} onSubmit={submit} onCancel={close} />
           )}
-        </>
+          {modal.type === 'user' && (
+            <UserForm entity={modal.entity} roles={roles} busy={busy} onSubmit={submit} onCancel={close} />
+          )}
+        </Modal>
       )}
     </div>
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button type="button" className="modal-close" onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Wraps a form: manages the submit error and shared footer buttons. */
+function FormShell({ busy, onSubmit, onCancel, buildPayload, children }) {
+  const [err, setErr] = useState('');
+  async function handle(e) {
+    e.preventDefault();
+    setErr('');
+    try {
+      await onSubmit(buildPayload());
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }
+  return (
+    <form onSubmit={handle} className="modal-form">
+      {children}
+      {err && <div className="alert error">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="ghost-btn" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="submit" className="save-btn" disabled={busy}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CheckList({ label, items, selected, toggle, empty }) {
+  return (
+    <div className="form-field">
+      <span className="form-label">{label}</span>
+      {items.length === 0 ? (
+        <p className="empty">{empty}</p>
+      ) : (
+        <div className="check-list">
+          {items.map((it) => (
+            <label key={it.id} className="check-row">
+              <input
+                type="checkbox"
+                checked={selected.includes(it.id)}
+                onChange={() => toggle(it.id)}
+              />
+              <span>
+                {it.name}
+                {it.is_admin && <span className="badge">admin</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoleForm({ entity, projects, busy, onSubmit, onCancel }) {
+  const [name, setName] = useState(entity?.name || '');
+  const [description, setDescription] = useState(entity?.description || '');
+  const [isAdmin, setIsAdmin] = useState(entity?.is_admin || false);
+  const [projectIds, setProjectIds] = useState(entity?.projects?.map((p) => p.id) || []);
+
+  const toggle = (id) =>
+    setProjectIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  return (
+    <FormShell
+      busy={busy}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
+      buildPayload={() => ({ name, description, is_admin: isAdmin, project_ids: projectIds })}
+    >
+      <label className="form-field">
+        <span className="form-label">Name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Description</span>
+        <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </label>
+      <label className="check-row standalone">
+        <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} />
+        <span>Administrator role</span>
+      </label>
+      <CheckList
+        label="Granted projects"
+        items={projects}
+        selected={projectIds}
+        toggle={toggle}
+        empty="No projects exist yet."
+      />
+    </FormShell>
+  );
+}
+
+function UserForm({ entity, roles, busy, onSubmit, onCancel }) {
+  const [name, setName] = useState(entity?.name || '');
+  const [email, setEmail] = useState(entity?.email || '');
+  const [jobTitle, setJobTitle] = useState(entity?.job_title || '');
+  const [isActive, setIsActive] = useState(entity ? entity.is_active : true);
+  const [roleIds, setRoleIds] = useState(entity?.roles?.map((r) => r.id) || []);
+
+  const toggle = (id) =>
+    setRoleIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  return (
+    <FormShell
+      busy={busy}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
+      buildPayload={() => ({
+        name,
+        email,
+        job_title: jobTitle,
+        is_active: isActive,
+        role_ids: roleIds,
+      })}
+    >
+      <label className="form-field">
+        <span className="form-label">Name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Email</span>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Job title</span>
+        <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+      </label>
+      <label className="check-row standalone">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        <span>Active</span>
+      </label>
+      <CheckList
+        label="Assigned roles"
+        items={roles}
+        selected={roleIds}
+        toggle={toggle}
+        empty="No roles exist yet."
+      />
+    </FormShell>
+  );
+}
+
+function ProjectForm({ entity, busy, onSubmit, onCancel }) {
+  const [name, setName] = useState(entity?.name || '');
+  const [description, setDescription] = useState(entity?.description || '');
+  const [provider, setProvider] = useState(entity?.provider || 'GITHUB');
+  const [repoUrl, setRepoUrl] = useState(entity?.repo_url || '');
+  const [branch, setBranch] = useState(entity?.default_branch || 'main');
+  const [status, setStatus] = useState(entity?.status || 'ACTIVE');
+  const [token, setToken] = useState('');
+
+  return (
+    <FormShell
+      busy={busy}
+      onSubmit={onSubmit}
+      onCancel={onCancel}
+      buildPayload={() => {
+        const payload = {
+          name,
+          description,
+          provider,
+          repo_url: repoUrl,
+          default_branch: branch,
+          status,
+        };
+        // Only send the token when the admin actually typed one; blank leaves
+        // the stored token untouched (backend treats null as "no change").
+        if (token) payload.access_token = token;
+        return payload;
+      }}
+    >
+      <label className="form-field">
+        <span className="form-label">Name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Description</span>
+        <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </label>
+      <div className="form-row">
+        <label className="form-field">
+          <span className="form-label">Provider</span>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <option value="GITHUB">GitHub</option>
+            <option value="GITLAB">GitLab</option>
+            <option value="MANUAL">Manual</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span className="form-label">Status</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="ACTIVE">Active</option>
+            <option value="DISABLED">Disabled</option>
+          </select>
+        </label>
+      </div>
+      <div className="form-row">
+        <label className="form-field grow">
+          <span className="form-label">Repository URL</span>
+          <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://…" />
+        </label>
+        <label className="form-field">
+          <span className="form-label">Default branch</span>
+          <input value={branch} onChange={(e) => setBranch(e.target.value)} />
+        </label>
+      </div>
+      <label className="form-field">
+        <span className="form-label">
+          Access token {entity?.token_last4 && <em>(stored ••{entity.token_last4} — leave blank to keep)</em>}
+        </span>
+        <input
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder={entity ? 'Leave blank to keep current token' : 'Optional'}
+          autoComplete="new-password"
+        />
+      </label>
+    </FormShell>
+  );
+}
+
+/* ---------- Icons ---------- */
+function PlusIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+function ArrowUpIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+function TrashIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+    </svg>
+  );
+}
+function GearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }

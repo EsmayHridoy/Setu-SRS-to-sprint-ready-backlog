@@ -6,9 +6,13 @@ is checked as well: conversations are private to the person who started them.
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import placeholder_ai
@@ -98,17 +102,16 @@ def delete_conversation(conversation_id: str,
     db.commit()
 
 
-@router.post("/{conversation_id}/messages", response_model=SendMessageResult)
-def send_message(conversation_id: str, payload: NewMessage,
-                 user: User = Depends(current_user),
-                 db: Session = Depends(get_db)):
-    """Post a user question, generate an assistant reply with citations, and
-    return both messages. Currently backed by the placeholder AI pipeline."""
-    conversation = _owned(db, conversation_id, user)
-    question = payload.content.strip()
-    if not question:
-        raise HTTPException(400, "Type a question first.")
+def _persist_exchange(db: Session, conversation: Conversation,
+                      question: str) -> tuple[Message, Message]:
+    """Persist the user's question and the assistant's drafted reply (with
+    citations), returning both messages. Shared by the plain and streaming
+    endpoints so they cannot drift apart.
 
+    Replace the marked block with the real pipeline: expand the query, run the
+    hybrid search scoped to conversation.project_id, call the model, then
+    discard any citation whose quoted text is not present in its artifact.
+    """
     user_message = Message(conversation_id=conversation.id, role="USER",
                            content=question)
     db.add(user_message)
@@ -117,9 +120,6 @@ def send_message(conversation_id: str, payload: NewMessage,
         conversation.title = placeholder_ai.title_for(question)
 
     # --- the seam ------------------------------------------------------------
-    # Replace this block with the real pipeline: expand the query, run the
-    # hybrid search scoped to conversation.project_id, call the model, then
-    # discard any citation whose quoted text is not present in its artifact.
     drafted = placeholder_ai.answer(db, conversation.project, question)
     is_placeholder = get_settings().use_placeholder_ai
     # -------------------------------------------------------------------------
@@ -139,9 +139,84 @@ def send_message(conversation_id: str, payload: NewMessage,
     conversation.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(reply)
+    return user_message, reply
+
+
+@router.post("/{conversation_id}/messages", response_model=SendMessageResult)
+def send_message(conversation_id: str, payload: NewMessage,
+                 user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """Post a user question, generate an assistant reply with citations, and
+    return both messages. Currently backed by the placeholder AI pipeline."""
+    conversation = _owned(db, conversation_id, user)
+    question = payload.content.strip()
+    if not question:
+        raise HTTPException(400, "Type a question first.")
+
+    user_message, reply = _persist_exchange(db, conversation, question)
 
     return SendMessageResult(
         conversation=_out(conversation),
         user_message=MessageOut.model_validate(user_message),
         reply=MessageOut.model_validate(reply),
+    )
+
+
+def _sse(event: str, data: dict) -> str:
+    """Format one Server-Sent Event frame."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+# Stream the reply in chunks that end on whitespace, so words are never split
+# across events. When the real model is wired in, replace the pre-computed
+# content below with the model's own token stream.
+_CHUNK = re.compile(r"\S+\s*")
+
+
+@router.post("/{conversation_id}/messages/stream")
+def stream_message(conversation_id: str, payload: NewMessage,
+                   user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    """Same as `send_message`, but the assistant reply is delivered over
+    Server-Sent Events: a `start` frame with the persisted user message and an
+    empty reply shell, a run of `delta` frames carrying the reply text, and a
+    final `done` frame with the complete reply (ids, citations, placeholder
+    flag). The whole exchange is persisted up front, so the stream only ever
+    replays already-committed content and never touches the request's DB
+    session from inside the generator.
+    """
+    conversation = _owned(db, conversation_id, user)
+    question = payload.content.strip()
+    if not question:
+        raise HTTPException(400, "Type a question first.")
+
+    user_message, reply = _persist_exchange(db, conversation, question)
+
+    conversation_out = _out(conversation).model_dump(mode="json")
+    user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
+    reply_out = MessageOut.model_validate(reply).model_dump(mode="json")
+    content = reply_out["content"]
+
+    async def event_stream():
+        yield _sse("start", {
+            "conversation": conversation_out,
+            "user_message": user_message_out,
+            "reply_id": reply_out["id"],
+        })
+        for chunk in _CHUNK.findall(content):
+            yield _sse("delta", {"text": chunk})
+            await asyncio.sleep(0.02)  # pacing; the real stream sets its own
+        yield _sse("done", {
+            "conversation": conversation_out,
+            "reply": reply_out,
+        })
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # defeat proxy buffering (e.g. nginx)
+        },
     )
