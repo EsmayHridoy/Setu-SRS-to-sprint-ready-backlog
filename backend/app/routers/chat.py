@@ -11,11 +11,13 @@ import json
 import re
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, UploadFile, status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import placeholder_ai
+from .. import extraction, placeholder_ai
 from ..config import get_settings
 from ..db import get_db
 from ..models import Citation, Conversation, Message, User
@@ -167,31 +169,28 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",  # defeat proxy buffering (e.g. nginx)
+}
+
 # Stream the reply in chunks that end on whitespace, so words are never split
 # across events. When the real model is wired in, replace the pre-computed
 # content below with the model's own token stream.
 _CHUNK = re.compile(r"\S+\s*")
 
 
-@router.post("/{conversation_id}/messages/stream")
-def stream_message(conversation_id: str, payload: NewMessage,
-                   user: User = Depends(current_user),
-                   db: Session = Depends(get_db)):
-    """Same as `send_message`, but the assistant reply is delivered over
-    Server-Sent Events: a `start` frame with the persisted user message and an
-    empty reply shell, a run of `delta` frames carrying the reply text, and a
-    final `done` frame with the complete reply (ids, citations, placeholder
-    flag). The whole exchange is persisted up front, so the stream only ever
-    replays already-committed content and never touches the request's DB
-    session from inside the generator.
+def _reply_stream(conversation: Conversation, user_message: Message,
+                  reply: Message) -> StreamingResponse:
+    """Deliver an already-persisted exchange over Server-Sent Events: a `start`
+    frame with the user message and an empty reply shell, a run of `delta`
+    frames carrying the reply text, then a `done` frame with the complete reply.
+
+    Everything is serialized up front, so the async generator only replays
+    in-memory strings and never touches the request's DB session — which the
+    dependency will have closed by the time the body streams.
     """
-    conversation = _owned(db, conversation_id, user)
-    question = payload.content.strip()
-    if not question:
-        raise HTTPException(400, "Type a question first.")
-
-    user_message, reply = _persist_exchange(db, conversation, question)
-
     conversation_out = _out(conversation).model_dump(mode="json")
     user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
     reply_out = MessageOut.model_validate(reply).model_dump(mode="json")
@@ -211,12 +210,60 @@ def stream_message(conversation_id: str, payload: NewMessage,
             "reply": reply_out,
         })
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # defeat proxy buffering (e.g. nginx)
-        },
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers=_SSE_HEADERS)
+
+
+@router.post("/{conversation_id}/messages/stream")
+def stream_message(conversation_id: str, payload: NewMessage,
+                   user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    """Same as `send_message`, but the assistant reply is delivered over SSE."""
+    conversation = _owned(db, conversation_id, user)
+    question = payload.content.strip()
+    if not question:
+        raise HTTPException(400, "Type a question first.")
+
+    user_message, reply = _persist_exchange(db, conversation, question)
+    return _reply_stream(conversation, user_message, reply)
+
+
+@router.post("/{conversation_id}/messages/upload")
+async def upload_message(conversation_id: str,
+                         file: UploadFile = File(...),
+                         prompt: str = Form(""),
+                         user: User = Depends(current_user),
+                         db: Session = Depends(get_db)):
+    """Upload a PDF/DOCX and stream its extracted text back as the assistant
+    reply. The user turn records that a document was uploaded (plus any typed
+    prompt); the assistant turn is the extracted context itself, delivered over
+    the same SSE frames as `stream_message`.
+    """
+    conversation = _owned(db, conversation_id, user)
+
+    data = await file.read()
+    kind, text, truncated = extraction.extract(file.filename, file.content_type, data)
+    filename = file.filename or f"document.{kind}"
+
+    note = f"[Uploaded document: {filename}]"
+    if prompt.strip():
+        note += f"\n\n{prompt.strip()}"
+    user_message = Message(conversation_id=conversation.id, role="USER",
+                           content=note)
+    db.add(user_message)
+
+    if conversation.title == "New conversation":
+        conversation.title = placeholder_ai.title_for(prompt.strip() or filename)
+
+    header = (f"Extracted {len(text):,} characters from {filename}"
+              f"{' (truncated)' if truncated else ''}:")
+    reply = Message(conversation_id=conversation.id, role="ASSISTANT",
+                    content=f"{header}\n\n{text}", is_placeholder=False)
+    db.add(reply)
+    db.flush()
+
+    conversation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(reply)
+
+    return _reply_stream(conversation, user_message, reply)

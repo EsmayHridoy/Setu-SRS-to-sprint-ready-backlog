@@ -139,7 +139,18 @@ class NewConversation(BaseModel):
 
 
 class NewMessage(BaseModel):
-    content: str = Field(min_length=1, max_length=8000)
+    # Generous because an extracted PDF/DOCX excerpt may be folded into the
+    # message alongside the question. See uploads.MAX_TEXT_CHARS.
+    content: str = Field(min_length=1, max_length=60_000)
+
+
+class ExtractResult(BaseModel):
+    """Plain text pulled from an uploaded document, ready to fold into a message."""
+    filename: str
+    kind: str
+    chars: int
+    truncated: bool
+    text: str
 
 
 class SendMessageResult(BaseModel):

@@ -32,11 +32,15 @@ async function request(path, { method = 'GET', userId, body } = {}) {
   return data;
 }
 
-async function streamSSE(path, userId, body, handlers, signal) {
+// Opens an SSE stream over POST. Pass `{ json }` for a JSON body or `{ form }`
+// for multipart (a FormData) — with FormData we must let the browser set the
+// Content-Type so the multipart boundary is included.
+async function streamSSE(path, userId, { json, form }, handlers, signal) {
+  const isForm = form !== undefined;
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: headers(userId, true),
-    body: JSON.stringify(body),
+    headers: headers(userId, !isForm),
+    body: isForm ? form : JSON.stringify(json),
     signal,
   });
 
@@ -117,12 +121,57 @@ export const api = {
       body: { content },
     }),
 
+  // Upload a PDF/DOCX and get its extracted plain text back. The browser sets
+  // the multipart Content-Type (with boundary), so we must not set it here.
+  extractFile: async (userId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/api/uploads/extract`, {
+      method: 'POST',
+      headers: headers(userId, false),
+      body: form,
+    });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    if (!res.ok) {
+      const detail = data?.detail || data?.message || text || res.statusText;
+      throw new Error(`${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+    }
+    return data;
+  },
+
   // Streaming reply over Server-Sent Events. Calls the handlers as frames
   // arrive: onStart({ conversation, user_message, reply_id }), onDelta(text),
   // onDone({ conversation, reply }). Returns a promise that resolves when the
   // stream ends. Pass `signal` (an AbortSignal) to cancel.
   streamMessage: (userId, conversationId, content, handlers = {}, signal) =>
-    streamSSE(`/api/conversations/${conversationId}/messages/stream`, userId, { content }, handlers, signal),
+    streamSSE(
+      `/api/conversations/${conversationId}/messages/stream`,
+      userId,
+      { json: { content } },
+      handlers,
+      signal,
+    ),
+
+  // Upload a PDF/DOCX; the extracted text streams back as the assistant reply
+  // over the same SSE frames as streamMessage.
+  streamUpload: (userId, conversationId, file, prompt, handlers = {}, signal) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (prompt) form.append('prompt', prompt);
+    return streamSSE(
+      `/api/conversations/${conversationId}/messages/upload`,
+      userId,
+      { form },
+      handlers,
+      signal,
+    );
+  },
 
   // Admin
   admin: {

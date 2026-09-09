@@ -14,6 +14,7 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messageText, setMessageText] = useState('');
+  const [attachment, setAttachment] = useState(null); // { file, filename, size }
   const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('chat'); // chat | admin
 
@@ -115,25 +116,40 @@ export default function App() {
     }
   }
 
+  function attachFile(file) {
+    if (!file) return;
+    setError('');
+    setAttachment({ file, filename: file.name, size: file.size });
+  }
+
   async function sendMessage(e) {
     e.preventDefault();
-    if (!activeConversation || !messageText.trim() || streaming) return;
-    const text = messageText.trim();
+    if (!activeConversation || streaming) return;
+    if (!messageText.trim() && !attachment) return;
+    const typed = messageText.trim();
+    const att = attachment;
     const convId = activeConversation.id;
     const tempUserId = `tmp-u-${Date.now()}`;
     const tempReplyId = `tmp-a-${Date.now()}`;
 
+    // With an attachment the user turn is just a note; the extracted text
+    // arrives as the streamed reply. Without one it's the typed question.
+    const userContent = att
+      ? `[Uploaded document: ${att.filename}]${typed ? `\n\n${typed}` : ''}`
+      : typed;
+
     setError('');
     setMessageText('');
+    setAttachment(null);
     setStreaming(true);
 
-    // Optimistically show the question and an empty assistant bubble that the
+    // Optimistically show the user turn and an empty assistant bubble that the
     // stream fills in token by token.
     setActiveConversation((prev) => ({
       ...prev,
       messages: [
         ...(prev.messages || []),
-        { id: tempUserId, role: 'USER', content: text, citations: [] },
+        { id: tempUserId, role: 'USER', content: userContent, citations: [] },
         { id: tempReplyId, role: 'ASSISTANT', content: '', citations: [], streaming: true },
       ],
     }));
@@ -144,17 +160,20 @@ export default function App() {
         return { ...prev, messages: prev.messages.map((m) => (m.id === id ? fn(m) : m)) };
       });
 
+    const handlers = {
+      onStart: (data) => patch(tempUserId, () => data.user_message),
+      onDelta: (chunk) => patch(tempReplyId, (m) => ({ ...m, content: m.content + chunk })),
+      onDone: (data) => {
+        patch(tempReplyId, () => ({ ...data.reply, streaming: false }));
+        setActiveConversation((prev) =>
+          prev && prev.id === convId ? { ...prev, ...data.conversation } : prev,
+        );
+      },
+    };
+
     try {
-      await api.streamMessage(userId, convId, text, {
-        onStart: (data) => patch(tempUserId, () => data.user_message),
-        onDelta: (chunk) => patch(tempReplyId, (m) => ({ ...m, content: m.content + chunk })),
-        onDone: (data) => {
-          patch(tempReplyId, () => ({ ...data.reply, streaming: false }));
-          setActiveConversation((prev) =>
-            prev && prev.id === convId ? { ...prev, ...data.conversation } : prev,
-          );
-        },
-      });
+      if (att) await api.streamUpload(userId, convId, att.file, typed, handlers);
+      else await api.streamMessage(userId, convId, typed, handlers);
       await loadConversations();
     } catch (err) {
       setError(err.message);
@@ -376,6 +395,9 @@ export default function App() {
               onSubmit={sendMessage}
               onKeyDown={onComposerKeyDown}
               disabled={streaming}
+              attachment={attachment}
+              onAttach={attachFile}
+              onRemoveAttach={() => setAttachment(null)}
             />
           </>
         ) : (
@@ -410,6 +432,9 @@ export default function App() {
                 disabled={!projectId || loading}
                 placeholder={projectId ? 'Message Setu…' : 'Select a project first'}
                 centered
+                attachment={attachment}
+                onAttach={attachFile}
+                onRemoveAttach={() => setAttachment(null)}
               />
             </div>
           </div>
@@ -419,15 +444,36 @@ export default function App() {
   );
 }
 
+// Split a user message into its optional document marker and the typed
+// question, so an uploaded PDF/DOCX shows as a compact chip. The extracted text
+// itself now arrives as the assistant reply, so the marker carries only a
+// filename (no embedded body).
+function parseUserContent(content) {
+  const up = content.match(/^\[Uploaded document: (.+?)\](?:\n\n)?/);
+  if (up) {
+    return { question: content.slice(up[0].length), doc: { filename: up[1] } };
+  }
+  return { question: content, doc: null };
+}
+
 function Message({ m }) {
   const isUser = m.role?.toLowerCase() === 'user';
   const isEmpty = !m.content;
+  const parsed = isUser ? parseUserContent(m.content) : null;
   return (
     <div className={`msg ${isUser ? 'user' : 'assistant'}`}>
       {!isUser && <div className="msg-avatar">S</div>}
       <div className="msg-body">
         {isUser ? (
-          <div className="bubble">{m.content}</div>
+          <div className="bubble">
+            {parsed.doc && (
+              <div className="doc-tag">
+                <PaperclipIcon />
+                <span>{parsed.doc.filename}</span>
+              </div>
+            )}
+            {parsed.question && <div className="bubble-text">{parsed.question}</div>}
+          </div>
         ) : m.streaming && isEmpty ? (
           <div className="typing">
             <span></span>
@@ -461,10 +507,64 @@ function Message({ m }) {
   );
 }
 
-function Composer({ value, onChange, onSubmit, onKeyDown, disabled, placeholder, centered }) {
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function Composer({
+  value,
+  onChange,
+  onSubmit,
+  onKeyDown,
+  disabled,
+  placeholder,
+  centered,
+  attachment,
+  onAttach,
+  onRemoveAttach,
+}) {
+  const fileRef = useRef(null);
+  const canSend = (value.trim() || attachment) && !disabled;
+
+  function pickFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (file) onAttach(file);
+  }
+
   return (
     <div className={`composer-wrap ${centered ? 'centered' : ''}`}>
+      {attachment && (
+        <div className="attach-chip">
+          <PaperclipIcon />
+          <span className="attach-name" title={attachment.filename}>
+            {attachment.filename}
+          </span>
+          <span className="attach-meta">{formatBytes(attachment.size)}</span>
+          <button type="button" className="attach-remove" onClick={onRemoveAttach} title="Remove">
+            ✕
+          </button>
+        </div>
+      )}
       <form className="composer" onSubmit={onSubmit}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          hidden
+          onChange={pickFile}
+        />
+        <button
+          type="button"
+          className="attach-btn"
+          onClick={() => fileRef.current?.click()}
+          disabled={disabled}
+          title="Attach a PDF or DOCX"
+        >
+          <PaperclipIcon />
+        </button>
         <textarea
           rows={1}
           value={value}
@@ -472,16 +572,11 @@ function Composer({ value, onChange, onSubmit, onKeyDown, disabled, placeholder,
           onKeyDown={onKeyDown}
           placeholder={placeholder || 'Message Setu…'}
         />
-        <button
-          type="submit"
-          className="send-btn"
-          disabled={!value.trim() || disabled}
-          title="Send"
-        >
+        <button type="submit" className="send-btn" disabled={!canSend} title="Send">
           <ArrowUpIcon />
         </button>
       </form>
-      <p className="composer-hint">Press Enter to send · Shift+Enter for a new line</p>
+      <p className="composer-hint">Attach a PDF/DOCX · Enter to send · Shift+Enter for a new line</p>
     </div>
   );
 }
@@ -906,6 +1001,13 @@ function PlusIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+function PaperclipIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
     </svg>
   );
 }
