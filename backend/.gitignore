@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.idea
+.vscode/
+.DS_Store
+
+# ADK dev-UI local session/artifact storage (adk web) -- real chat state, not build output
+.adk/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
