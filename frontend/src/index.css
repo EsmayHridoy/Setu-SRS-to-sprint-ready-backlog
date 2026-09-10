@@ -819,6 +819,23 @@ select:focus {
   cursor: not-allowed;
 }
 
+.stop-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  transition: background 0.15s;
+}
+
+.stop-btn:hover {
+  background: var(--border-strong);
+}
+
 .composer-hint {
   text-align: center;
   font-size: 12px;

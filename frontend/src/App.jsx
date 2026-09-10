@@ -25,6 +25,7 @@ export default function App() {
   const [adminAudit, setAdminAudit] = useState([]);
 
   const threadEndRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     api
@@ -122,29 +123,17 @@ export default function App() {
     setAttachment({ file, filename: file.name, size: file.size });
   }
 
-  async function sendMessage(e) {
-    e.preventDefault();
-    if (!activeConversation || streaming) return;
-    if (!messageText.trim() && !attachment) return;
-    const typed = messageText.trim();
-    const att = attachment;
-    const convId = activeConversation.id;
+  // Core streaming send — works with any conversation ID already set as active.
+  async function sendToConversation(convId, typed, att) {
     const tempUserId = `tmp-u-${Date.now()}`;
     const tempReplyId = `tmp-a-${Date.now()}`;
-
-    // With an attachment the user turn is just a note; the extracted text
-    // arrives as the streamed reply. Without one it's the typed question.
     const userContent = att
       ? `[Uploaded document: ${att.filename}]${typed ? `\n\n${typed}` : ''}`
       : typed;
 
     setError('');
-    setMessageText('');
-    setAttachment(null);
     setStreaming(true);
 
-    // Optimistically show the user turn and an empty assistant bubble that the
-    // stream fills in token by token.
     setActiveConversation((prev) => ({
       ...prev,
       messages: [
@@ -171,19 +160,79 @@ export default function App() {
       },
     };
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      if (att) await api.streamUpload(userId, convId, att.file, typed, handlers);
-      else await api.streamMessage(userId, convId, typed, handlers);
+      if (att) await api.streamUpload(userId, convId, att.file, typed, handlers, controller.signal);
+      else await api.streamMessage(userId, convId, typed, handlers, controller.signal);
       await loadConversations();
     } catch (err) {
-      setError(err.message);
-      // Drop the empty assistant shell so a failed turn leaves no ghost bubble.
-      setActiveConversation((prev) => {
-        if (!prev || prev.id !== convId) return prev;
-        return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
-      });
+      if (err.name === 'AbortError') {
+        // User stopped the stream. Keep any partial text that arrived but clear
+        // the streaming flag so the caret and typing dots disappear. If nothing
+        // arrived yet, drop the empty shell entirely.
+        setActiveConversation((prev) => {
+          if (!prev || prev.id !== convId) return prev;
+          const reply = prev.messages.find((m) => m.id === tempReplyId);
+          if (!reply) return prev;
+          if (!reply.content) {
+            return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
+          }
+          return {
+            ...prev,
+            messages: prev.messages.map((m) =>
+              m.id === tempReplyId ? { ...m, streaming: false } : m,
+            ),
+          };
+        });
+      } else {
+        setError(err.message);
+        setActiveConversation((prev) => {
+          if (!prev || prev.id !== convId) return prev;
+          return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
+        });
+      }
     } finally {
       setStreaming(false);
+      abortControllerRef.current = null;
+    }
+  }
+
+  function stopStreaming() {
+    abortControllerRef.current?.abort();
+  }
+
+  async function sendMessage(e) {
+    e.preventDefault();
+    if (!activeConversation || streaming) return;
+    if (!messageText.trim() && !attachment) return;
+    const typed = messageText.trim();
+    const att = attachment;
+    setMessageText('');
+    setAttachment(null);
+    await sendToConversation(activeConversation.id, typed, att);
+  }
+
+  // Used by the welcome-screen composer: create a conversation then immediately
+  // send the typed message in one step so Enter only has to be pressed once.
+  async function createConversationAndSend() {
+    if (!projectId) { setError('Select a project first'); return; }
+    if (!messageText.trim() && !attachment) return;
+    const typed = messageText.trim();
+    const att = attachment;
+    setMessageText('');
+    setAttachment(null);
+    setError('');
+    try {
+      const conv = await api.createConversation(userId, projectId);
+      await loadConversations();
+      const detail = await api.getConversation(userId, conv.id);
+      setActiveConversation(detail);
+      await sendToConversation(conv.id, typed, att);
+    } catch (e) {
+      setError(e.message);
+      setMessageText(typed);
     }
   }
 
@@ -399,6 +448,7 @@ export default function App() {
               onSubmit={sendMessage}
               onKeyDown={onComposerKeyDown}
               disabled={streaming}
+              onStop={stopStreaming}
               attachment={attachment}
               onAttach={attachFile}
               onRemoveAttach={() => setAttachment(null)}
@@ -417,20 +467,11 @@ export default function App() {
               <Composer
                 value={messageText}
                 onChange={setMessageText}
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!projectId) {
-                    setError('Select a project first');
-                    return;
-                  }
-                  const text = messageText;
-                  await createConversation();
-                  setMessageText(text);
-                }}
+                onSubmit={(e) => { e.preventDefault(); createConversationAndSend(); }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (projectId) createConversation();
+                    createConversationAndSend();
                   }
                 }}
                 disabled={!projectId || loading}
@@ -523,6 +564,7 @@ function Composer({
   onSubmit,
   onKeyDown,
   disabled,
+  onStop,
   placeholder,
   centered,
   attachment,
@@ -530,6 +572,7 @@ function Composer({
   onRemoveAttach,
 }) {
   const fileRef = useRef(null);
+  const isStreaming = disabled && !!onStop;
   const canSend = (value.trim() || attachment) && !disabled;
 
   function pickFile(e) {
@@ -575,10 +618,17 @@ function Composer({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder || 'Message Setu…'}
+          disabled={isStreaming}
         />
-        <button type="submit" className="send-btn" disabled={!canSend} title="Send">
-          <ArrowUpIcon />
-        </button>
+        {isStreaming ? (
+          <button type="button" className="stop-btn" onClick={onStop} title="Stop generating">
+            <StopIcon />
+          </button>
+        ) : (
+          <button type="submit" className="send-btn" disabled={!canSend} title="Send">
+            <ArrowUpIcon />
+          </button>
+        )}
       </form>
       <p className="composer-hint">Attach a PDF/DOCX · Enter to send · Shift+Enter for a new line</p>
     </div>
@@ -1019,6 +1069,13 @@ function ArrowUpIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+function StopIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
     </svg>
   );
 }
