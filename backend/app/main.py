@@ -20,7 +20,7 @@ from sqlalchemy.exc import OperationalError
 from . import crypto
 from .config import get_settings
 from .db import engine
-from .routers import admin, auth, chat, projects, uploads
+from .routers import admin, agent, auth, chat, projects, uploads
 
 log = logging.getLogger("setu")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -104,6 +104,7 @@ app.include_router(projects.router)
 app.include_router(chat.router)
 app.include_router(uploads.router)
 app.include_router(admin.router)
+app.include_router(agent.router)
 
 
 @app.get("/api/health", tags=["system"])

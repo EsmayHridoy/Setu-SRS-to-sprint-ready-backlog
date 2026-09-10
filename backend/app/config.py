@@ -94,6 +94,22 @@ class Settings:
         self.pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
         self.max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
+        # Gemini ADK agent that talks to a live repository through GitHub's
+        # hosted MCP server. Left unset, app/github_agent.py refuses with a
+        # clear error at call time rather than the app failing to start --
+        # this feature is opt-in, unlike DATABASE_URL above.
+        self.gemini_api_key = os.getenv("GOOGLE_API_KEY", "")
+        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        # A fine-grained PAT scoped to a single repo. That scope, set when the
+        # token is created on GitHub, is what limits the agent -- not this app.
+        self.github_pat = os.getenv("GITHUB_PAT", "")
+        self.github_mcp_url = os.getenv(
+            "GITHUB_MCP_URL", "https://api.githubcopilot.com/mcp/"
+        )
+        self.github_mcp_readonly = (
+            os.getenv("GITHUB_MCP_READONLY", "true").lower() == "true"
+        )
+
     @property
     def safe_database_url(self) -> str:
         """The URL with the password removed, for logs and error messages."""

@@ -159,6 +159,16 @@ class SendMessageResult(BaseModel):
     reply: MessageOut
 
 
+# --- github agent --------------------------------------------------------------
+
+class AgentPrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4_000)
+
+
+class AgentReply(BaseModel):
+    response: str
+
+
 # --- audit -------------------------------------------------------------------
 
 class AuditOut(ORM):
