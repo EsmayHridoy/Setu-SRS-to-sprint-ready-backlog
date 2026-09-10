@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+
+.idea/
+.vscode/
+.DS_Store
+
+# ADK dev-UI local session/artifact storage
+.adk/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.claude/
