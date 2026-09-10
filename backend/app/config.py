@@ -95,13 +95,15 @@ class Settings:
         self.max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
         # ADK agents that talk to a live repository through GitHub's hosted
-        # MCP server, backed by a local Ollama model via LiteLLM (see
-        # adk_runner.build_model). No API key: Ollama runs locally. Left
-        # unset, app/github_agent.py refuses with a clear error at call time
-        # rather than the app failing to start -- this feature is opt-in,
-        # unlike DATABASE_URL above.
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3.6:27b")
-        self.ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+        # MCP server, backed by a Google Gemini model via ADK's native Gemini
+        # integration (see adk_runner.build_model). GEMINI_MODEL is the single
+        # place to change which model runs. GEMINI_API_KEY comes from Google AI
+        # Studio; left blank, the google-genai client reads a GEMINI_API_KEY
+        # already in the environment, and if there is none the call fails at
+        # request time with a clear auth error rather than the app failing to
+        # start -- this feature is opt-in, unlike DATABASE_URL above.
+        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         # A fine-grained PAT scoped to a single repo. That scope, set when the
         # token is created on GitHub, is what limits the agent -- not this app.
         self.github_pat = os.getenv("GITHUB_PAT", "")
@@ -110,6 +112,10 @@ class Settings:
         # repository they can reach and waste turns guess-searching GitHub by
         # a human-readable project name that may not match the repo slug.
         self.github_repo = os.getenv("GITHUB_REPO", "")
+        # The branch every read is scoped to. The repo's own default branch is
+        # used when this is blank; set it when the code (and the .agent context
+        # file) you want the agents to read lives on a non-default branch.
+        self.github_branch = os.getenv("GITHUB_BRANCH", "")
         self.github_mcp_url = os.getenv(
             "GITHUB_MCP_URL", "https://api.githubcopilot.com/mcp/"
         )

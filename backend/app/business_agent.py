@@ -1,4 +1,4 @@
-"""Two local-Ollama-backed ADK agents for the business-plan workflow.
+"""Two Gemini-backed ADK agents for the business-plan workflow.
 
 `extract_businesses` reads an uploaded document's text and pulls out a
 numbered list of discrete business requirements, each tagged with where in
@@ -22,7 +22,7 @@ from google.adk.agents import LlmAgent
 from pydantic import BaseModel
 
 from . import github_mcp
-from .adk_runner import build_model, run_single_turn
+from .adk_runner import build_generate_config, build_model, run_single_turn
 
 log = logging.getLogger("setu")
 
@@ -46,17 +46,20 @@ _EXTRACTION_INSTRUCTION = (
 
 _VETTING_INSTRUCTION_TEMPLATE = (
     "You are vetting one proposed business requirement against the actual "
-    "code in the repository. {repo_hint} {tool_list_hint} Investigate using "
-    "the tools available to you, then answer two questions:\n\n"
+    "code in the repository. {repo_hint} {tool_list_hint}\n\n"
+    "{procedure}\n\n"
+    "First understand the current business the relevant code implements "
+    "today. Then answer two questions about the proposed requirement:\n\n"
     "1. Is this a change to an existing business rule/feature already "
     "implemented in the repository? If yes, is it feasible to incorporate "
-    "into the system as it exists today (set `change_feasible`; leave it "
-    "null if this isn't an existing-business change)?\n"
-    "2. Does this business impact other features related to it elsewhere "
-    "in the codebase?\n\n"
-    "Ground every claim in what you actually found through the tools -- "
-    "name the specific file, function or issue/PR you looked at in your "
-    "notes. Never claim to have made a change; you are only investigating. "
+    "into the system as it exists today, and does it fit how the current "
+    "business works (set `change_feasible`; leave it null if this isn't an "
+    "existing-business change)? Put the reasoning in `feasibility_notes`.\n"
+    "2. Does this business impact other features related to it elsewhere in "
+    "the codebase? Name where the impact lands in `impact_notes`.\n\n"
+    "Ground every claim in what you actually found through the tools -- name "
+    "the specific file, function or issue/PR you looked at in your notes. "
+    "Never claim to have made a change; you are only investigating. "
     "`verdict` should be one short sentence summarising your conclusion."
 )
 
@@ -101,6 +104,7 @@ async def extract_businesses(chunks: list[tuple[str, str]], *,
         name="business_extractor",
         instruction=_EXTRACTION_INSTRUCTION,
         output_schema=list[ExtractedBusiness],
+        generate_content_config=build_generate_config(),
     )
     final_text = await run_single_turn(
         agent, prompt, app_name=APP_NAME, user_id=user_id,
@@ -133,9 +137,11 @@ async def vet_business(description: str, *, user_id: str) -> BusinessVetting:
         instruction=_VETTING_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),
             tool_list_hint=github_mcp.tool_list_hint(),
+            procedure=github_mcp.investigation_procedure(),
         ),
         tools=[toolset],
         output_schema=BusinessVetting,
+        generate_content_config=build_generate_config(),
     )
     try:
         final_text = await run_single_turn(

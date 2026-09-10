@@ -15,9 +15,9 @@ from .config import get_settings
 
 
 def require_configured() -> None:
-    """Raise a clear error if GITHUB_PAT isn't set. No Ollama key check here
-    -- it's local and unauthenticated; if it's not running, the completion
-    call itself fails with a clear connection error.
+    """Raise a clear error if GITHUB_PAT isn't set. No Gemini key check here
+    -- if GEMINI_API_KEY is missing the model call itself fails with a clear
+    auth error.
     """
     if not get_settings().github_pat:
         raise RuntimeError(
@@ -34,22 +34,30 @@ def repo_hint() -> str:
     match the repo at all. Falls back to a vaguer hint if GITHUB_REPO isn't
     set, since the PAT's scope still limits the agent even without it named.
     """
-    repo = get_settings().github_repo
+    settings = get_settings()
+    repo = settings.github_repo
+    branch = settings.github_branch
+    branch_clause = (
+        f" Read everything from the `{branch}` branch: pass it as the `ref` "
+        "(branch) argument on every get_file_contents, search and list call, "
+        "not the repository's default branch."
+        if branch else ""
+    )
     if repo:
         return (
             f"You have access to exactly one repository: `{repo}`. Use that "
             "\"owner/repo\" directly in every tool call -- never search "
-            "GitHub by name to find it. This repository may be private -- "
-            "that does not mean you lack access: your token has been "
-            "explicitly granted read access to it specifically, so read its "
-            "actual files and code with your tools rather than refusing or "
+            f"GitHub by name to find it.{branch_clause} This repository may be "
+            "private -- that does not mean you lack access: your token has "
+            "been explicitly granted read access to it specifically, so read "
+            "its actual files and code with your tools rather than refusing or "
             "assuming you can't see its contents."
         )
     return (
         "You have access to exactly one repository, whichever your access "
         "token is scoped to. If a tool needs an explicit owner/repo and you "
         "don't already know it, use a tool that reveals your own access "
-        "context first rather than guessing or searching by name."
+        f"context first rather than guessing or searching by name.{branch_clause}"
     )
 
 
@@ -90,6 +98,52 @@ def tool_list_hint() -> str:
         f"Your exact available tools are: {names}. If asked what you can "
         "do, answer from this list -- never guess or describe a "
         "plausible-sounding but different set of tools."
+    )
+
+
+def investigation_procedure() -> str:
+    """The repo-grounding discipline the repo-reading agents share.
+
+    Built around `.agent/context.yaml` as the single source of truth: every
+    request reads that map first and follows its `paths` straight to the
+    handful of files that implement the feature in question -- no blind
+    searching, no directory crawling. That is both the efficiency lever (a
+    couple of targeted reads instead of dozens of searches) and the
+    truthfulness lever (every claim traceable to a file the map pointed to and
+    the agent actually opened). Searching is a fallback used only when the map
+    is missing or doesn't cover the area.
+    """
+    return (
+        "STEP 1 - ALWAYS, on every single request, before anything else: read "
+        "`.agent/context.yaml` with get_file_contents. This file is the "
+        "authoritative map of the repository and it is how you decide what to "
+        "read. You do NOT search the codebase to find things -- you look them "
+        "up in this map. Read it first, every time, no exceptions.\n\n"
+        "Its shape: a `project` summary; `conventions` (datasources, config "
+        "files, shared constants); and a `features` list where each feature "
+        "has `name`, `description`, `paths` (the exact files that implement "
+        "it, most-relevant first), `key_symbols` (classes/methods to read), "
+        "`related_features` (what a change ripples into) and `http` (its REST "
+        "surface).\n\n"
+        "STEP 2 - locate the feature: find the feature(s) in `features` whose "
+        "name/description match the request. The map now tells you exactly "
+        "which files matter -- you do not need to guess or search.\n\n"
+        "STEP 3 - read only the mapped files: fetch ONLY the files listed "
+        "under those features' `paths` with get_file_contents (for an impact "
+        "question, also read the `paths` of their `related_features`). Do not "
+        "search_code and do not crawl directories to rediscover files the map "
+        "already names.\n\n"
+        "STEP 4 - answer, grounded: base every statement on the file contents "
+        "you actually read, never on a guess (how you present that -- business "
+        "language or technical detail -- is set by your own instructions). The "
+        "map plus the handful of files it names is enough, so as soon as you "
+        "can answer, STOP calling tools and write the answer. Never read the "
+        "same file twice.\n\n"
+        "FALLBACK - only if `.agent/context.yaml` genuinely does not exist, or "
+        "has no feature covering the request: then, and ONLY then, read the "
+        "README and use search_code to locate the relevant files. Never fall "
+        "back to searching while the map still covers the area. If even the "
+        "fallback shows nothing, say so plainly rather than guessing."
     )
 
 

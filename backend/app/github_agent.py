@@ -1,4 +1,4 @@
-"""GitHub agent -- a local-Ollama-backed ADK agent wired to GitHub's hosted MCP server.
+"""GitHub agent -- a Gemini-backed ADK agent wired to GitHub's hosted MCP server.
 
 The agent reaches GitHub only through MCP tool calls, and the MCP server is
 GitHub's own hosted endpoint (api.githubcopilot.com/mcp), authenticated with
