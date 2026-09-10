@@ -1,4 +1,4 @@
-"""GitHub agent -- a Gemini ADK agent wired to GitHub's hosted MCP server.
+"""GitHub agent -- a local-Ollama-backed ADK agent wired to GitHub's hosted MCP server.
 
 The agent reaches GitHub only through MCP tool calls, and the MCP server is
 GitHub's own hosted endpoint (api.githubcopilot.com/mcp), authenticated with
@@ -12,66 +12,20 @@ answers by calling out to a live repository through tools.
 """
 from __future__ import annotations
 
-import os
-
 from google.adk.agents import LlmAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.tools.mcp_tool import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import (
-    StreamableHTTPConnectionParams,
-)
-from google.genai import types
 
-from .config import get_settings
+from . import github_mcp
+from .adk_runner import build_model, run_single_turn
 
 APP_NAME = "setu-github-agent"
 
-_INSTRUCTION = (
-    "You are Setu's GitHub assistant. You can read issues, pull requests, "
-    "files and commits on the one repository the caller's token is scoped "
-    "to, through the tools available to you. Never claim to have made a "
-    "change unless a tool call actually reports success. Keep answers short "
-    "and name the specific issue, PR or file you looked at."
+_INSTRUCTION_TEMPLATE = (
+    "You are Setu's GitHub assistant. {repo_hint} {tool_list_hint} You can "
+    "read issues, pull requests, files and commits through the tools "
+    "available to you. Never claim to have made a change unless a tool "
+    "call actually reports success. Keep answers short and name the "
+    "specific issue, PR or file you looked at."
 )
-
-
-def _require(value: str, env_var: str) -> str:
-    if not value:
-        raise RuntimeError(
-            f"{env_var} is not set. Add it to backend/.env before using the "
-            "GitHub agent -- see .env.example."
-        )
-    return value
-
-
-def _build_agent() -> tuple[LlmAgent, McpToolset]:
-    settings = get_settings()
-    token = _require(settings.github_pat, "GITHUB_PAT")
-    api_key = _require(settings.gemini_api_key, "GOOGLE_API_KEY")
-
-    # google-genai reads its key from this env var rather than taking one as
-    # an argument; config.py's load_dotenv() has already set it if it came
-    # from backend/.env, this just covers a key set only in Settings.
-    os.environ.setdefault("GOOGLE_API_KEY", api_key)
-
-    toolset = McpToolset(
-        connection_params=StreamableHTTPConnectionParams(
-            url=settings.github_mcp_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "X-MCP-Toolsets": "all",
-                "X-MCP-Readonly": "true" if settings.github_mcp_readonly else "false",
-            },
-        ),
-    )
-    agent = LlmAgent(
-        model=settings.gemini_model,
-        name="github_agent",
-        instruction=_INSTRUCTION,
-        tools=[toolset],
-    )
-    return agent, toolset
 
 
 async def ask(prompt: str, *, user_id: str) -> str:
@@ -81,21 +35,22 @@ async def ask(prompt: str, *, user_id: str) -> str:
     This endpoint is low volume, and it keeps a dropped MCP connection from
     being silently reused across unrelated requests.
     """
-    agent, toolset = _build_agent()
-    session_service = InMemorySessionService()
-    session = await session_service.create_session(
-        app_name=APP_NAME, user_id=user_id,
-    )
-    runner = Runner(app_name=APP_NAME, agent=agent, session_service=session_service)
+    github_mcp.require_configured()
 
-    content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    final_text = ""
+    toolset = github_mcp.build_toolset()
+    agent = LlmAgent(
+        model=build_model(),
+        name="github_agent",
+        instruction=_INSTRUCTION_TEMPLATE.format(
+            repo_hint=github_mcp.repo_hint(),
+            tool_list_hint=github_mcp.tool_list_hint(),
+        ),
+        tools=[toolset],
+    )
     try:
-        async for event in runner.run_async(
-            user_id=user_id, session_id=session.id, new_message=content,
-        ):
-            if event.is_final_response() and event.content and event.content.parts:
-                final_text = "".join(part.text or "" for part in event.content.parts)
+        final_text = await run_single_turn(
+            agent, prompt, app_name=APP_NAME, user_id=user_id,
+        )
     finally:
         await toolset.close()
 

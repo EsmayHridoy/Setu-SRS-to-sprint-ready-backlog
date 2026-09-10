@@ -169,6 +169,47 @@ class AgentReply(BaseModel):
     response: str
 
 
+# --- business plans -----------------------------------------------------------
+
+class BusinessItemOut(ORM):
+    id: str
+    seq_no: int
+    description: str
+    location: str
+    vetting_status: str
+    is_existing_business_change: bool | None = None
+    change_feasible: bool | None = None
+    feasibility_notes: str
+    impacts_other_features: bool | None = None
+    impact_notes: str
+    verdict: str
+    error_message: str
+    vetted_at: datetime | None = None
+
+
+class BusinessPlanOut(ORM):
+    id: str
+    project_id: str
+    project_name: str = ""
+    source_filename: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BusinessPlanDetail(BusinessPlanOut):
+    items: list[BusinessItemOut] = []
+
+
+class BusinessItemEdit(BaseModel):
+    description: str = Field(min_length=1, max_length=2_000)
+    location: str = ""
+
+
+class BusinessPlanItemsIn(BaseModel):
+    items: list[BusinessItemEdit]
+
+
 # --- audit -------------------------------------------------------------------
 
 class AuditOut(ORM):

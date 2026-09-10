@@ -20,7 +20,7 @@ from sqlalchemy.exc import OperationalError
 from . import crypto
 from .config import get_settings
 from .db import engine
-from .routers import admin, agent, auth, chat, projects, uploads
+from .routers import admin, agent, auth, business, chat, projects, uploads
 
 log = logging.getLogger("setu")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -30,7 +30,7 @@ settings = get_settings()
 REQUIRED_TABLES = {
     "users", "roles", "user_roles", "projects", "role_projects",
     "artifacts", "conversations", "messages", "citations",
-    "audit_events", "jobs",
+    "audit_events", "jobs", "business_plans", "business_items",
 }
 
 
@@ -105,6 +105,7 @@ app.include_router(chat.router)
 app.include_router(uploads.router)
 app.include_router(admin.router)
 app.include_router(agent.router)
+app.include_router(business.router)
 
 
 @app.get("/api/health", tags=["system"])

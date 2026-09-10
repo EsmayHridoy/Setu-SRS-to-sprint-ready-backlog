@@ -62,6 +62,102 @@ def _extract_docx(data: bytes) -> str:
     return "\n".join(parts)
 
 
+def _pdf_locations(data: bytes) -> list[tuple[str, str]]:
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001 - surface any parse failure as 422
+        raise HTTPException(422, "That PDF could not be read; it may be corrupt "
+                                 "or password-protected.") from exc
+    chunks = []
+    for i, page in enumerate(reader.pages, start=1):
+        text = (page.extract_text() or "").strip()
+        if text:
+            chunks.append((f"Page {i}", text))
+    return chunks
+
+
+def _docx_locations(data: bytes) -> list[tuple[str, str]]:
+    import docx
+
+    try:
+        document = docx.Document(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, "That DOCX could not be read; it may be corrupt "
+                                 "or not a real Word document.") from exc
+
+    chunks: list[tuple[str, str]] = []
+    label = "Paragraph 1"
+    buffer: list[str] = []
+
+    def flush() -> None:
+        text = "\n".join(buffer).strip()
+        if text:
+            chunks.append((label, text))
+        buffer.clear()
+
+    for p in document.paragraphs:
+        text = p.text.strip()
+        if not text:
+            continue
+        is_heading = bool(p.style and p.style.name
+                          and p.style.name.lower().startswith("heading"))
+        if is_heading:
+            flush()
+            label = f"Section: {text}"
+        else:
+            buffer.append(text)
+    flush()
+
+    # Tables aren't interleaved with paragraph order by python-docx's simple
+    # API (same limitation _extract_docx already has), so they're tagged
+    # with whichever section came last rather than their true position.
+    for table in document.tables:
+        rows = [" | ".join(c.text.strip() for c in row.cells if c.text.strip())
+                for row in table.rows]
+        rows = [r for r in rows if r]
+        if rows:
+            chunks.append((label, "\n".join(rows)))
+
+    return chunks
+
+
+def extract_with_locations(filename: str | None, content_type: str | None,
+                           data: bytes) -> list[tuple[str, str]]:
+    """Like extract(), but keeps the document broken into page/section-labelled
+    chunks instead of one joined string -- for callers that need to trace a
+    finding back to where in the source document it came from.
+
+    Raises the same HTTPExceptions as extract() for an unsupported type,
+    empty file, oversized file or a file with no readable text. Chunks past
+    MAX_TEXT_CHARS are dropped whole rather than truncated mid-chunk.
+    """
+    kind = detect_kind(filename, content_type)
+    if not data:
+        raise HTTPException(422, "The uploaded file is empty.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413, f"File is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.")
+
+    chunks = _pdf_locations(data) if kind == "pdf" else _docx_locations(data)
+    if not chunks:
+        raise HTTPException(
+            422,
+            "No selectable text was found. If this is a scanned document it "
+            "needs OCR, which is not supported here.",
+        )
+
+    kept: list[tuple[str, str]] = []
+    total = 0
+    for label, text in chunks:
+        if total + len(text) > MAX_TEXT_CHARS:
+            break
+        kept.append((label, text))
+        total += len(text)
+    return kept
+
+
 def extract(filename: str | None, content_type: str | None,
             data: bytes) -> tuple[str, str, bool]:
     """Validate and extract. Returns (kind, text, truncated).

@@ -191,6 +191,59 @@ class Citation(Base):
     message = relationship("Message", back_populates="citations")
 
 
+# --- business plans -----------------------------------------------------------
+
+class BusinessPlan(Base):
+    __tablename__ = "business_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    source_filename: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT")  # DRAFT | CONFIRMED | DONE
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    project = relationship("Project", lazy="joined")
+    items = relationship("BusinessItem", back_populates="plan",
+                         cascade="all, delete-orphan",
+                         order_by="BusinessItem.seq_no")
+
+
+class BusinessItem(Base):
+    """One extracted business requirement, vetted against the live repo.
+
+    vetting_status is what makes vetting resumable: a dropped SSE connection
+    loses no work because every item's result is written here as soon as
+    it's produced, and re-opening the stream just resumes at the first
+    PENDING row instead of starting over.
+    """
+    __tablename__ = "business_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    plan_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_plans.id", ondelete="CASCADE"), index=True)
+    seq_no: Mapped[int] = mapped_column(Integer)
+    description: Mapped[str] = mapped_column(Text)
+    # Where in the source document this came from, e.g. "Page 3" or
+    # "Section: Refund Policy". Blank for an item the human adds by hand.
+    location: Mapped[str] = mapped_column(String(200), default="")
+
+    vetting_status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING | DONE | ERROR
+    is_existing_business_change: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    change_feasible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    feasibility_notes: Mapped[str] = mapped_column(Text, default="")
+    impacts_other_features: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    impact_notes: Mapped[str] = mapped_column(Text, default="")
+    verdict: Mapped[str] = mapped_column(Text, default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    vetted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    plan = relationship("BusinessPlan", back_populates="items")
+
+
 # --- audit -------------------------------------------------------------------
 
 class AuditEvent(Base):

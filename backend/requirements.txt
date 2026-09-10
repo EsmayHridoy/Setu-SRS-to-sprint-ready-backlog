@@ -10,3 +10,9 @@ psycopg[binary]==3.2.3
 pypdf==5.1.0
 python-docx==1.1.2
 google-adk[mcp]==2.8.0
+# Pinned below the latest (1.100.1 at time of writing): that release and
+# 1.98.0-1.99.0 unconditionally import an Anthropic module that uses
+# typing.NotRequired, which only exists in the stdlib from Python 3.11 --
+# breaks on our Python 3.10 venv regardless of which provider is actually
+# used. 1.96.0 is the newest version confirmed not to hit this.
+litellm==1.96.0

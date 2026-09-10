@@ -7,7 +7,7 @@ is checked as well: conversations are private to the person who started them.
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 import re
 from datetime import datetime
 
@@ -17,15 +17,18 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import extraction, placeholder_ai
+from .. import chat_agent, extraction, github_mcp, placeholder_ai
 from ..config import get_settings
-from ..db import get_db
+from ..db import SessionLocal, get_db
 from ..models import Citation, Conversation, Message, User
 from ..schemas import (
     ConversationDetail, ConversationOut, MessageOut, NewConversation,
     NewMessage, SendMessageResult,
 )
 from ..security import authorised_project, current_user, projects_for_user
+from ..sse import SSE_HEADERS, sse_event
+
+log = logging.getLogger("setu")
 
 router = APIRouter(prefix="/api/conversations", tags=["chat"])
 
@@ -104,15 +107,11 @@ def delete_conversation(conversation_id: str,
     db.commit()
 
 
-def _persist_exchange(db: Session, conversation: Conversation,
-                      question: str) -> tuple[Message, Message]:
-    """Persist the user's question and the assistant's drafted reply (with
-    citations), returning both messages. Shared by the plain and streaming
-    endpoints so they cannot drift apart.
-
-    Replace the marked block with the real pipeline: expand the query, run the
-    hybrid search scoped to conversation.project_id, call the model, then
-    discard any citation whose quoted text is not present in its artifact.
+def _persist_user_message(db: Session, conversation: Conversation,
+                          question: str) -> Message:
+    """Persist the user's turn and title the conversation from it if it's
+    still untitled. Shared by every path that starts an exchange, whether
+    the reply comes from the placeholder or the real agent.
     """
     user_message = Message(conversation_id=conversation.id, role="USER",
                            content=question)
@@ -121,17 +120,22 @@ def _persist_exchange(db: Session, conversation: Conversation,
     if conversation.title == "New conversation":
         conversation.title = placeholder_ai.title_for(question)
 
-    # --- the seam ------------------------------------------------------------
-    drafted = placeholder_ai.answer(db, conversation.project, question)
-    is_placeholder = get_settings().use_placeholder_ai
-    # -------------------------------------------------------------------------
+    db.commit()
+    db.refresh(user_message)
+    return user_message
 
+
+def _persist_reply(db: Session, conversation: Conversation, content: str, *,
+                   is_placeholder: bool, citations=()) -> Message:
+    """Persist the assistant's reply (with any citations) and bump the
+    conversation's updated_at. Shared by the placeholder and real-agent paths.
+    """
     reply = Message(conversation_id=conversation.id, role="ASSISTANT",
-                    content=drafted.content, is_placeholder=is_placeholder)
+                    content=content, is_placeholder=is_placeholder)
     db.add(reply)
     db.flush()
 
-    for draft in drafted.citations:
+    for draft in citations:
         db.add(Citation(message_id=reply.id, artifact_id=draft.artifact_id,
                         kind=draft.kind, source_ref=draft.source_ref,
                         quoted_span=draft.quoted_span,
@@ -141,21 +145,51 @@ def _persist_exchange(db: Session, conversation: Conversation,
     conversation.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(reply)
+    return reply
+
+
+def _persist_exchange(db: Session, conversation: Conversation,
+                      question: str) -> tuple[Message, Message]:
+    """Placeholder path: answer from indexed project artifacts, with
+    citations. Used whenever USE_PLACEHOLDER_AI is true; see chat_agent.py
+    for the real, GitHub-MCP-backed path used when it's false.
+    """
+    user_message = _persist_user_message(db, conversation, question)
+    drafted = placeholder_ai.answer(db, conversation.project, question)
+    reply = _persist_reply(db, conversation, drafted.content,
+                           is_placeholder=True, citations=drafted.citations)
     return user_message, reply
 
 
 @router.post("/{conversation_id}/messages", response_model=SendMessageResult)
-def send_message(conversation_id: str, payload: NewMessage,
-                 user: User = Depends(current_user),
-                 db: Session = Depends(get_db)):
-    """Post a user question, generate an assistant reply with citations, and
-    return both messages. Currently backed by the placeholder AI pipeline."""
+async def send_message(conversation_id: str, payload: NewMessage,
+                       user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
+    """Post a user question, generate an assistant reply, and return both
+    messages. Backed by the placeholder AI pipeline unless USE_PLACEHOLDER_AI
+    is false, in which case the reply comes from chat_agent's GitHub-MCP
+    agent instead (no citations in that case -- see chat_agent.py)."""
     conversation = _owned(db, conversation_id, user)
     question = payload.content.strip()
     if not question:
         raise HTTPException(400, "Type a question first.")
 
-    user_message, reply = _persist_exchange(db, conversation, question)
+    if get_settings().use_placeholder_ai:
+        user_message, reply = _persist_exchange(db, conversation, question)
+    else:
+        user_message = _persist_user_message(db, conversation, question)
+        try:
+            content = await chat_agent.answer(
+                conversation.project.name, question, user_id=user.id,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - surface a clean error, not a raw 500
+            log.warning("chat_agent.answer failed: %s", exc)
+            raise HTTPException(
+                503, "The agent could not answer right now. Please try again.",
+            ) from exc
+        reply = _persist_reply(db, conversation, content, is_placeholder=False)
 
     return SendMessageResult(
         conversation=_out(conversation),
@@ -163,17 +197,6 @@ def send_message(conversation_id: str, payload: NewMessage,
         reply=MessageOut.model_validate(reply),
     )
 
-
-def _sse(event: str, data: dict) -> str:
-    """Format one Server-Sent Event frame."""
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-
-_SSE_HEADERS = {
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "X-Accel-Buffering": "no",  # defeat proxy buffering (e.g. nginx)
-}
 
 # Stream the reply in chunks that end on whitespace, so words are never split
 # across events. When the real model is wired in, replace the pre-computed
@@ -197,35 +220,109 @@ def _reply_stream(conversation: Conversation, user_message: Message,
     content = reply_out["content"]
 
     async def event_stream():
-        yield _sse("start", {
+        yield sse_event("start", {
             "conversation": conversation_out,
             "user_message": user_message_out,
             "reply_id": reply_out["id"],
         })
         for chunk in _CHUNK.findall(content):
-            yield _sse("delta", {"text": chunk})
+            yield sse_event("delta", {"text": chunk})
             await asyncio.sleep(0.02)  # pacing; the real stream sets its own
-        yield _sse("done", {
+        yield sse_event("done", {
             "conversation": conversation_out,
             "reply": reply_out,
         })
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
-                             headers=_SSE_HEADERS)
+                             headers=SSE_HEADERS)
+
+
+def _agent_reply_stream(conversation: Conversation, user_message: Message,
+                        project_name: str, question: str,
+                        user_id: str) -> StreamingResponse:
+    """Same start/delta/done contract as _reply_stream, but the delta text is
+    the real agent's own output as it's generated, and the reply's content
+    isn't known until the stream finishes -- so, like
+    app/routers/business.py's vet_stream, this opens its own SessionLocal()
+    rather than the request-scoped `db` dependency, which FastAPI closes
+    before a StreamingResponse body has actually sent anything.
+    """
+    conversation_out = _out(conversation).model_dump(mode="json")
+    user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
+    conversation_id = conversation.id
+
+    async def event_stream():
+        session = SessionLocal()
+        try:
+            conv = session.get(Conversation, conversation_id)
+            reply = Message(conversation_id=conv.id, role="ASSISTANT",
+                            content="", is_placeholder=False)
+            session.add(reply)
+            session.commit()
+            session.refresh(reply)
+
+            yield sse_event("start", {
+                "conversation": conversation_out,
+                "user_message": user_message_out,
+                "reply_id": reply.id,
+            })
+
+            final_text = ""
+            try:
+                async for is_final, text in chat_agent.answer_stream(
+                    project_name, question, user_id=user_id,
+                ):
+                    if is_final:
+                        final_text = text
+                    else:
+                        yield sse_event("delta", {"text": text})
+            except Exception as exc:  # noqa: BLE001 - surface, don't hang the stream
+                final_text = f"Something went wrong answering this question: {exc}"
+
+            reply.content = final_text or "The agent returned no response."
+            conv.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(reply)
+
+            yield sse_event("done", {
+                "conversation": _out(conv).model_dump(mode="json"),
+                "reply": MessageOut.model_validate(reply).model_dump(mode="json"),
+            })
+        finally:
+            session.close()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers=SSE_HEADERS)
 
 
 @router.post("/{conversation_id}/messages/stream")
 def stream_message(conversation_id: str, payload: NewMessage,
                    user: User = Depends(current_user),
                    db: Session = Depends(get_db)):
-    """Same as `send_message`, but the assistant reply is delivered over SSE."""
+    """Same as `send_message`, but the assistant reply is delivered over SSE.
+
+    With USE_PLACEHOLDER_AI true, this is unchanged: compute the full
+    placeholder answer, then fake-stream it word by word via _reply_stream --
+    the same helper `.../messages/upload` uses, untouched by this branch.
+    Otherwise, the reply streams for real from chat_agent as it's generated.
+    """
     conversation = _owned(db, conversation_id, user)
     question = payload.content.strip()
     if not question:
         raise HTTPException(400, "Type a question first.")
 
-    user_message, reply = _persist_exchange(db, conversation, question)
-    return _reply_stream(conversation, user_message, reply)
+    if get_settings().use_placeholder_ai:
+        user_message, reply = _persist_exchange(db, conversation, question)
+        return _reply_stream(conversation, user_message, reply)
+
+    try:
+        github_mcp.require_configured()
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    user_message = _persist_user_message(db, conversation, question)
+    return _agent_reply_stream(conversation, user_message,
+                               conversation.project.name, question, user.id)
 
 
 @router.post("/{conversation_id}/messages/upload")

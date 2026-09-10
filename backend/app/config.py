@@ -94,21 +94,34 @@ class Settings:
         self.pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
         self.max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
 
-        # Gemini ADK agent that talks to a live repository through GitHub's
-        # hosted MCP server. Left unset, app/github_agent.py refuses with a
-        # clear error at call time rather than the app failing to start --
-        # this feature is opt-in, unlike DATABASE_URL above.
-        self.gemini_api_key = os.getenv("GOOGLE_API_KEY", "")
-        self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        # ADK agents that talk to a live repository through GitHub's hosted
+        # MCP server, backed by a local Ollama model via LiteLLM (see
+        # adk_runner.build_model). No API key: Ollama runs locally. Left
+        # unset, app/github_agent.py refuses with a clear error at call time
+        # rather than the app failing to start -- this feature is opt-in,
+        # unlike DATABASE_URL above.
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3.6:27b")
+        self.ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
         # A fine-grained PAT scoped to a single repo. That scope, set when the
         # token is created on GitHub, is what limits the agent -- not this app.
         self.github_pat = os.getenv("GITHUB_PAT", "")
+        # "owner/repo" the PAT above is actually scoped to, e.g. "acme/api".
+        # Purely for prompting: without it, agents have no way to know which
+        # repository they can reach and waste turns guess-searching GitHub by
+        # a human-readable project name that may not match the repo slug.
+        self.github_repo = os.getenv("GITHUB_REPO", "")
         self.github_mcp_url = os.getenv(
             "GITHUB_MCP_URL", "https://api.githubcopilot.com/mcp/"
         )
         self.github_mcp_readonly = (
             os.getenv("GITHUB_MCP_READONLY", "true").lower() == "true"
         )
+        # "all" (21 toolsets) pushes every request's tool-schema payload past
+        # 12k tokens before any real content -- easily blows a free-tier
+        # tokens-per-minute cap on its own. GitHub's own "default" toolset
+        # (context, repos, issues, pull_requests, users) already covers what
+        # these agents need: reading code, issues and PRs.
+        self.github_mcp_toolsets = os.getenv("GITHUB_MCP_TOOLSETS", "default")
 
     @property
     def safe_database_url(self) -> str:
