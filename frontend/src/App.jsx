@@ -15,6 +15,8 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [tab, setTab] = useState('chat');
   const [showChangePwd, setShowChangePwd] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const userMenuRef = useRef(null);
 
   // Admin state
   const [adminRoles, setAdminRoles] = useState([]);
@@ -43,6 +45,18 @@ export default function App() {
   useEffect(() => {
     if (session && projectId) loadConversations(projectId);
   }, [session, projectId]);
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    if (!showUserMenu) return;
+    function handle(e) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setShowUserMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [showUserMenu]);
 
   const msgs = activeConversation?.messages;
   const lastMsg = msgs?.[msgs.length - 1];
@@ -259,101 +273,135 @@ export default function App() {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="new-chat"
-            onClick={createConversation}
-            disabled={!projectId}
-          >
-            <PlusIcon />
-            New chat
-          </button>
+          {tab !== 'admin' && (
+            <>
+              <button
+                type="button"
+                className="new-chat"
+                onClick={createConversation}
+                disabled={!projectId}
+              >
+                <PlusIcon />
+                New chat
+              </button>
 
-          <label className="field">
-            <span className="field-label">Project</span>
-            <select
-              value={projectId}
-              onChange={(e) => {
-                setProjectId(e.target.value);
-                setActiveConversation(null);
-              }}
-            >
-              <option value="">— select —</option>
-              {session?.projects?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="conv-scroll">
-          <div className="conv-heading">Chats</div>
-          {conversations.length === 0 ? (
-            <p className="empty">No conversations yet</p>
-          ) : (
-            <ul className="conv-list">
-              {conversations.map((c) => (
-                <li
-                  key={c.id}
-                  className={activeConversation?.id === c.id ? 'active' : ''}
+              <label className="field">
+                <span className="field-label">Project</span>
+                <select
+                  value={projectId}
+                  onChange={(e) => {
+                    setProjectId(e.target.value);
+                    setActiveConversation(null);
+                  }}
                 >
-                  <button
-                    type="button"
-                    className="conv-open"
-                    onClick={() => openConversation(c.id)}
-                    title={c.title || 'Untitled'}
-                  >
-                    {c.title || 'Untitled'}
-                  </button>
-                  <button
-                    type="button"
-                    className="conv-del"
-                    onClick={() => deleteConversation(c.id)}
-                    title="Delete"
-                  >
-                    <TrashIcon />
-                  </button>
-                </li>
-              ))}
-            </ul>
+                  <option value="">— select —</option>
+                  {session?.projects?.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           )}
         </div>
+
+        {tab !== 'admin' && (
+          <div className="conv-scroll">
+            <div className="conv-heading">Chats</div>
+            {conversations.length === 0 ? (
+              <p className="empty">No conversations yet</p>
+            ) : (
+              <ul className="conv-list">
+                {conversations.map((c) => (
+                  <li
+                    key={c.id}
+                    className={activeConversation?.id === c.id ? 'active' : ''}
+                  >
+                    <button
+                      type="button"
+                      className="conv-open"
+                      onClick={() => openConversation(c.id)}
+                      title={c.title || 'Untitled'}
+                    >
+                      {c.title || 'Untitled'}
+                    </button>
+                    <button
+                      type="button"
+                      className="conv-del"
+                      onClick={() => deleteConversation(c.id)}
+                      title="Delete"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {tab === 'admin' && <div style={{ flex: 1 }} />}
 
         <div className="sidebar-bottom">
-          {session?.is_admin && (
+          <div className="user-menu-wrap" ref={userMenuRef}>
+            {showUserMenu && (
+              <div className="user-menu">
+                <div className="user-menu-header">
+                  <span className="acct-avatar sm">
+                    {(session?.user?.name || '?').charAt(0)}
+                  </span>
+                  <div className="user-menu-info">
+                    <span className="user-menu-name">{session?.user?.name}</span>
+                    <span className="user-menu-email">{session?.user?.email}</span>
+                  </div>
+                </div>
+                <div className="user-menu-divider" />
+                {session?.is_admin && (
+                  <button
+                    type="button"
+                    className="user-menu-item"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      if (tab === 'admin') { setTab('chat'); } else { setTab('admin'); loadAdmin(); }
+                    }}
+                  >
+                    <GearIcon /> {tab === 'admin' ? 'Back to chat' : 'Admin panel'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="user-menu-item"
+                  onClick={() => { setShowUserMenu(false); setShowChangePwd(true); }}
+                >
+                  <LockIcon /> Change password
+                </button>
+                <div className="user-menu-divider" />
+                <button
+                  type="button"
+                  className="user-menu-item danger"
+                  onClick={logout}
+                >
+                  <SignOutIcon /> Sign out
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
-              className={`side-link ${tab === 'admin' ? 'active' : ''}`}
-              onClick={() => {
-                if (tab === 'admin') {
-                  setTab('chat');
-                } else {
-                  setTab('admin');
-                  loadAdmin();
-                }
-              }}
+              className={`user-chip-btn ${showUserMenu ? 'open' : ''}`}
+              onClick={() => setShowUserMenu((v) => !v)}
             >
-              <GearIcon />
-              {tab === 'admin' ? 'Back to chat' : 'Admin'}
-            </button>
-          )}
-          <div className="user-chip">
-            <span className="acct-avatar sm">
-              {(session?.user?.name || '?').charAt(0)}
-            </span>
-            <span className="user-chip-body">
-              <span className="user-chip-name">
-                {session?.user?.name}
-                {session?.is_admin && <span className="badge">admin</span>}
+              <span className="acct-avatar sm">
+                {(session?.user?.name || '?').charAt(0)}
               </span>
-            </span>
-            <button type="button" className="side-link tiny" onClick={() => setShowChangePwd(true)}>
-              Password
-            </button>
-            <button type="button" className="side-link tiny" onClick={logout}>
-              Sign out
+              <span className="user-chip-body">
+                <span className="user-chip-name">
+                  {session?.user?.name}
+                  {session?.is_admin && <span className="badge">admin</span>}
+                </span>
+              </span>
+              <ChevronIcon open={showUserMenu} />
             </button>
           </div>
 
@@ -1527,6 +1575,31 @@ function GearIcon() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+function LockIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+function SignOutIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  );
+}
+function ChevronIcon({ open }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+      <polyline points="18 15 12 9 6 15" />
     </svg>
   );
 }
