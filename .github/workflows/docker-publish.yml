@@ -1,0 +1,139 @@
+name: Build and publish Docker images
+
+# Same shape as the org's GitLab pipelines (SohozDesk): a production tag
+# (setu-production-*) triggers a build, but only once it's confirmed the tag
+# was actually cut from staging or main -- not some throwaway branch. Two
+# independent jobs build and push the backend and frontend images to this
+# repo's own GitHub Container Registry package.
+#
+# No deploy step here on purpose -- this workflow stops once the images are
+# in the registry. Add a job that curls a Hostinger/Dokploy redeploy webhook
+# once that side is set up, the same way SohozDesk's pipeline does.
+#
+# Repository variable (Settings -> Secrets and variables -> Actions ->
+# Variables), optional:
+#   VITE_API_BASE_URL   the backend's public URL, baked into the frontend
+#                        build (Vite reads it at build time, not runtime).
+#                        Falls back to a localhost URL meant only for a
+#                        local docker-compose setup otherwise.
+on:
+  push:
+    tags:
+      - 'setu-production-*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Mirrors the ancestor check every SohozDesk build does before it's
+  # trusted: a production tag must actually sit on staging or main, not on
+  # some unrelated branch someone tagged by mistake.
+  check-tag-origin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag was created from staging or main
+        run: |
+          echo "Checking that $GITHUB_SHA is on staging or main..."
+          git fetch origin staging main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/staging; then
+            echo "OK: $GITHUB_SHA is on staging."
+          elif git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "OK: $GITHUB_SHA is on main."
+          else
+            echo "ERROR: Tag must be created from staging or main."
+            exit 1
+          fi
+
+  build-backend:
+    needs: check-tag-origin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "name=${REGISTRY,,}/${GITHUB_REPOSITORY,,}-backend" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  build-frontend:
+    needs: check-tag-origin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "name=${REGISTRY,,}/${GITHUB_REPOSITORY,,}-frontend" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          # Vite bakes VITE_* variables in at build time, not container
+          # start -- the real backend URL must be known here.
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL || 'http://localhost:8001' }}
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  summary:
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print published images
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "### Images published" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`ghcr.io/${REPO_LOWER}-backend:${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`ghcr.io/${REPO_LOWER}-frontend:${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Check each package's visibility under the repo's **Packages** tab -- it should read **Private**." >> "$GITHUB_STEP_SUMMARY"
