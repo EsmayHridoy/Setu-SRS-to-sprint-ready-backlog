@@ -2,11 +2,20 @@
 
 `extract_businesses` reads an uploaded document's text and pulls out a
 numbered list of discrete business requirements, each tagged with where in
-the document it came from. `vet_business` takes one of those and checks it
-against the live GitHub repo (through the same GITHUB_PAT-authenticated MCP
-connection app/github_agent.py uses) on the two criteria the review process
-cares about: is this a change to an existing business, and if so is it
-feasible; and does it impact other related features.
+the document it came from. Documents that follow BRAC IT's own Change
+Request template already group each requirement as a "Story" -- User Story,
+Actors, Pre-condition, Impacted Areas, Requirements, Acceptance Criteria,
+Exceptions -- so one Story is kept as one item, verbatim, rather than
+compressed into a single sentence. Free-form SRS prose without that
+structure is still distilled into one-sentence items as before.
+
+`vet_business` takes one of those and checks it against the live GitHub repo
+(through the same GITHUB_PAT-authenticated MCP connection app/github_agent.py
+uses), responding in the BA's own template vocabulary -- User Story, Actors,
+Pre-condition, Impacted Areas, Requirements, Acceptance Criteria, Exceptions
+-- verified and gap-filled against what the repository actually shows, plus
+a Verdict the template itself doesn't have a field for but which is the
+whole point of vetting.
 
 Both rely on the installed google-adk's documented support for combining
 `output_schema` with `tools` -- tools stay available during the reasoning
@@ -34,34 +43,90 @@ _EXTRACTION_INSTRUCTION = (
     "business analyst to review. The document is given to you as labelled "
     "chunks, each starting with its location in brackets, e.g. [Page 3] or "
     "[Section: Refund Policy].\n\n"
-    "Pull out every distinct, actionable business requirement or rule -- "
-    "each as one short, standalone sentence a business analyst would "
-    "recognise as a single reviewable item. Do not merge unrelated "
-    "requirements together, and do not invent anything that isn't stated or "
-    "clearly implied in the text. For each one, set `location` to the label "
-    "of the chunk it came from, exactly as it appears inside the brackets "
-    "but without the brackets themselves (e.g. `Page 3`, not `[Page 3]`). "
-    "If nothing in the document reads as a business requirement, return an "
+    "Some chunks are already a full \"Story\" from a Change Request template: "
+    "they contain their own labelled fields such as `User Story:`, `Actors:`, "
+    "`Pre-condition:`, `Impacted Areas:`, `Requirements:`, `Acceptance "
+    "Criteria:` and/or `Exceptions:`. When a chunk reads this way, treat the "
+    "WHOLE chunk as ONE item: copy its full text into `description` exactly "
+    "as written, keeping every one of its labelled fields intact -- do not "
+    "compress it down to a single sentence, and do not split its "
+    "sub-fields (like individual Requirements lines) into separate items. "
+    "That one chunk is one story, and one story is one requirement to vet.\n\n"
+    "For any other chunk -- ordinary prose that is not structured this way -- "
+    "pull out every distinct, actionable business requirement or rule as one "
+    "short, standalone sentence a business analyst would recognise as a "
+    "single reviewable item.\n\n"
+    "In both cases: do not merge unrelated requirements together, and do not "
+    "invent anything that isn't stated or clearly implied in the text. "
+    "Skip administrative content that is not itself a requirement -- cover "
+    "sheets, revision history, sign-off tables, risk-analysis tables, effort "
+    "estimation and accumulation tables. Set `location` to the label of the "
+    "chunk it came from, exactly as it appears inside the brackets but "
+    "without the brackets themselves (e.g. `Page 3`, not `[Page 3]`). If "
+    "nothing in the document reads as a business requirement, return an "
     "empty list."
 )
 
 _VETTING_INSTRUCTION_TEMPLATE = (
-    "You are vetting one proposed business requirement against the actual "
-    "code in the repository. {repo_hint} {tool_list_hint}\n\n"
+    "You are vetting one proposed business requirement -- a \"Story\" from "
+    "BRAC IT's own Change Request template, or an equivalent requirement -- "
+    "acting as a Business Analyst and solutions architect. Respond to the BA "
+    "using the SAME field vocabulary their own template already uses, so "
+    "your answer reads as a filled-in, verified version of the story they "
+    "wrote, not a different framework. Write every field in plain business "
+    "language. Do NOT put file paths, class or function names, or database "
+    "table/column names anywhere in your answer -- investigate the actual "
+    "repository to ground yourself, but translate everything you find into "
+    "business terms before writing it down. {repo_hint}\n\n"
     "{procedure}\n\n"
-    "First understand the current business the relevant code implements "
-    "today. Then answer two questions about the proposed requirement:\n\n"
-    "1. Is this a change to an existing business rule/feature already "
-    "implemented in the repository? If yes, is it feasible to incorporate "
-    "into the system as it exists today, and does it fit how the current "
-    "business works (set `change_feasible`; leave it null if this isn't an "
-    "existing-business change)? Put the reasoning in `feasibility_notes`.\n"
-    "2. Does this business impact other features related to it elsewhere in "
-    "the codebase? Name where the impact lands in `impact_notes`.\n\n"
-    "Ground every claim in what you actually found through the tools -- name "
-    "the specific file, function or issue/PR you looked at in your notes. "
-    "Never claim to have made a change; you are only investigating. "
-    "`verdict` should be one short sentence summarising your conclusion.\n\n"
+    "The requirement you are given may already state some of these fields "
+    "(the BA's own draft) or may be a short plain sentence with none of them "
+    "-- either way, fill every field below yourself, grounded in what the "
+    "repository actually shows:\n\n"
+    "`is_requirement_clear` -- is the requirement itself clear enough to "
+    "vet, or is it vague/ambiguous enough that the client should be asked to "
+    "clarify it first? If it is not clear, still fill the fields below as "
+    "best you can from what is given, but say plainly in `verdict` what is "
+    "unclear and what should be asked.\n\n"
+    "`user_story` -- restate it in the classic form \"As a <actor> I want to "
+    "<action> so I can <outcome>\". If the BA already wrote one, verify it "
+    "reads correctly and clean it up; if not, write one from the "
+    "requirement.\n\n"
+    "`actors` -- who initiates this and who else is involved. If the BA "
+    "listed actors, check them against the roles/users the system actually "
+    "has; correct or add any that don't match.\n\n"
+    "`pre_condition` -- what must already be true in the system for this to "
+    "work (state, permission, prior step). Ground this in what you actually "
+    "find; if the BA listed pre-conditions, verify them.\n\n"
+    "`impacted_areas` -- name the actual pages, screens, reports or "
+    "features this touches, in the BA's own \"Pages -- X, Y, Z\" / "
+    "\"Reports -- A, B, C\" style. If the BA listed some, verify each is "
+    "really affected and add any real ones they missed.\n\n"
+    "`requirements` -- describe what the system already does in this area "
+    "today, and exactly what gap remains to fully satisfy the requirement "
+    "(nothing missing if it's already fully supported). Describe it in plain "
+    "business behaviour -- what a user can do and what the system does in "
+    "response -- never by naming the actual endpoint path, method, class or "
+    "annotation you found; that applies here just as strictly as everywhere "
+    "else in this answer.\n\n"
+    "`acceptance_criteria` -- if the BA already gave criteria, check each "
+    "one against how the system actually behaves and flag any that don't "
+    "hold; then add any criteria a careful BA would expect that are still "
+    "missing. If none were given, propose a reasonable set grounded in what "
+    "you found.\n\n"
+    "`exceptions` -- same pattern as acceptance criteria: verify any "
+    "edge cases the BA already listed against what the code actually "
+    "handles, and add real edge cases they missed (only ones you can "
+    "ground in the code -- never invent a hypothetical one).\n\n"
+    "`is_feasible` and `already_supported` -- whether this is feasible to "
+    "build given how the system works today, and whether it's already "
+    "served by an existing feature.\n\n"
+    "`verdict` -- one short paragraph in business language giving your "
+    "overall conclusion: feasible or not, already supported or new work, "
+    "and the one thing the BA most needs to know.\n\n"
+    "Ground every field in what you actually found by investigating the "
+    "repository -- never guess, and never claim to have made a change; you "
+    "are only investigating.\n\n"
     "The message may open with the conversation this requirement came from, "
     "including the other requirements extracted from the same document. Use "
     "it only as background -- clarifications the user gave, or how this "
@@ -76,21 +141,44 @@ class ExtractedBusiness(BaseModel):
 
 
 class BusinessVetting(BaseModel):
-    is_existing_business_change: bool
-    change_feasible: bool | None = None
-    feasibility_notes: str
-    impacts_other_features: bool
-    impact_notes: str
+    is_requirement_clear: bool
+    is_feasible: bool
+    already_supported: bool
+    user_story: str
+    actors: str
+    pre_condition: str
+    impacted_areas: str
+    requirements: str
+    acceptance_criteria: str
+    exceptions: str
     verdict: str
+
+
+def _unescape_literal_newlines(value):
+    """Gemini's JSON output sometimes double-escapes the backslash in a
+    multi-line field, e.g. sends the four characters `\\\\n` where valid JSON
+    needs `\\n` to decode to one real newline. json.loads then hands back a
+    string containing the literal two characters backslash-n instead of an
+    actual newline byte, which renders as a visible "\\n" in the UI. Fix it
+    up after parsing rather than trying to prompt the model out of it.
+    """
+    if isinstance(value, str):
+        return value.replace("\\n", "\n").replace("\\t", "\t")
+    if isinstance(value, list):
+        return [_unescape_literal_newlines(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _unescape_literal_newlines(v) for k, v in value.items()}
+    return value
 
 
 def _parse_json(final_text: str, label: str):
     try:
-        return json.loads(final_text)
+        parsed = json.loads(final_text)
     except (json.JSONDecodeError, TypeError):
         log.warning("business_agent: could not parse %s output as JSON: %r",
                    label, final_text[:500])
         return None
+    return _unescape_literal_newlines(parsed)
 
 
 async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
@@ -153,7 +241,6 @@ async def vet_business(description: str, *, user_id: str,
         name="business_vetter",
         instruction=_VETTING_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),
-            tool_list_hint=github_mcp.tool_list_hint(),
             procedure=github_mcp.investigation_procedure(),
         ),
         tools=[toolset],

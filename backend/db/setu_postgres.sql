@@ -205,16 +205,40 @@ CREATE TABLE business_items (
     -- "Section: Refund Policy". Blank for an item the human adds by hand.
     location                     VARCHAR(200) NOT NULL DEFAULT '',
     vetting_status               VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
-    is_existing_business_change  BOOLEAN,
-    change_feasible              BOOLEAN,
+    -- Whether the requirement itself is clear enough to vet, or vague/
+    -- ambiguous enough that the client should be asked to clarify it first.
+    is_requirement_clear         BOOLEAN,
+    is_feasible                  BOOLEAN,
+    already_supported            BOOLEAN,
+    -- Response fields, in BRAC IT's own Change Request / Story template
+    -- vocabulary -- verified and gap-filled against the live repository.
+    user_story                   TEXT         NOT NULL DEFAULT '',
+    actors                       TEXT         NOT NULL DEFAULT '',
+    pre_condition                TEXT         NOT NULL DEFAULT '',
+    impacted_areas               TEXT         NOT NULL DEFAULT '',
+    requirements                 TEXT         NOT NULL DEFAULT '',
+    acceptance_criteria          TEXT         NOT NULL DEFAULT '',
+    exceptions                   TEXT         NOT NULL DEFAULT '',
+    -- Superseded by the template-shaped fields above. Kept (unpopulated by
+    -- new vettings) for historical rows and anything still reading them.
+    current_business             TEXT         NOT NULL DEFAULT '',
     feasibility_notes            TEXT         NOT NULL DEFAULT '',
+    integration_approach         VARCHAR(30),
+    related_existing_feature     TEXT         NOT NULL DEFAULT '',
+    integration_notes            TEXT         NOT NULL DEFAULT '',
     impacts_other_features       BOOLEAN,
     impact_notes                 TEXT         NOT NULL DEFAULT '',
+    is_existing_business_change  BOOLEAN,
+    change_feasible              BOOLEAN,
     verdict                      TEXT         NOT NULL DEFAULT '',
     error_message                TEXT         NOT NULL DEFAULT '',
     vetted_at                    TIMESTAMP,
     CONSTRAINT business_items_vetting_status_check
         CHECK (vetting_status IN ('PENDING', 'DONE', 'ERROR')),
+    CONSTRAINT business_items_integration_approach_check
+        CHECK (integration_approach IS NULL OR integration_approach IN (
+            'ALREADY_SUPPORTED', 'EXTEND_EXISTING_FEATURE', 'NEW_FEATURE_OR_ENDPOINT'
+        )),
     CONSTRAINT uq_business_items_plan_seq UNIQUE (plan_id, seq_no)
 );
 

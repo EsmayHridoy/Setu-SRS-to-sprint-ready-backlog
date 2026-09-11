@@ -46,7 +46,11 @@ def _yes_no(value: bool | None) -> str:
 
 
 def render_plan(plan: BusinessPlan) -> str:
-    """The plan as plain text: every item, and its vetting result if it has one."""
+    """The plan as plain text: every item, and its vetting result if it has
+    one -- in BRAC IT's own Change Request / Story template vocabulary
+    (User Story, Actors, Pre-condition, Impacted Areas, Requirements,
+    Acceptance Criteria, Exceptions, Verdict).
+    """
     status = _PLAN_STATUS.get(plan.status, plan.status.lower())
     lines = [f"[Business requirements from {plan.source_filename} -- {status}]"]
     if not plan.items:
@@ -57,16 +61,26 @@ def render_plan(plan: BusinessPlan) -> str:
         if item.vetting_status == "DONE":
             lines.append(f"   Verdict: {_clip(item.verdict, MAX_NOTE_CHARS)}")
             lines.append(
-                f"   Changes an existing business: "
-                f"{_yes_no(item.is_existing_business_change)}; feasible: "
-                f"{_yes_no(item.change_feasible)}. "
-                f"{_clip(item.feasibility_notes, MAX_NOTE_CHARS)}"
+                f"   Requirement clear: {_yes_no(item.is_requirement_clear)}; "
+                f"feasible: {_yes_no(item.is_feasible)}; "
+                f"already supported: {_yes_no(item.already_supported)}"
+            )
+            lines.append(f"   User Story: {_clip(item.user_story, MAX_NOTE_CHARS)}")
+            lines.append(f"   Actors: {_clip(item.actors, MAX_NOTE_CHARS)}")
+            lines.append(
+                f"   Pre-condition: {_clip(item.pre_condition, MAX_NOTE_CHARS)}"
             )
             lines.append(
-                f"   Impacts other features: "
-                f"{_yes_no(item.impacts_other_features)}. "
-                f"{_clip(item.impact_notes, MAX_NOTE_CHARS)}"
+                f"   Impacted Areas: {_clip(item.impacted_areas, MAX_NOTE_CHARS)}"
             )
+            lines.append(
+                f"   Requirements: {_clip(item.requirements, MAX_NOTE_CHARS)}"
+            )
+            lines.append(
+                f"   Acceptance Criteria: "
+                f"{_clip(item.acceptance_criteria, MAX_NOTE_CHARS)}"
+            )
+            lines.append(f"   Exceptions: {_clip(item.exceptions, MAX_NOTE_CHARS)}")
         elif item.vetting_status == "ERROR":
             lines.append("   Vetting failed for this item.")
     return "\n".join(lines)
