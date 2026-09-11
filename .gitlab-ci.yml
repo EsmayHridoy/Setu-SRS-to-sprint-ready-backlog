@@ -42,7 +42,13 @@ variables:
 check-tag-origin:
   extends: .tag_only
   stage: validate
-  image: alpine/git:latest
+  # alpine/git's own default ENTRYPOINT is `git` (a shortcut for `docker run
+  # alpine/git clone ...`) -- left in place, GitLab CI's own `sh -c "..."`
+  # becomes `git sh -c "..."` and fails with "'sh' is not a git command".
+  # Same class of override as the kaniko jobs below, for the same reason.
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
   script:
     - |
       echo "Checking tag $CI_COMMIT_TAG was created from staging or main..."
