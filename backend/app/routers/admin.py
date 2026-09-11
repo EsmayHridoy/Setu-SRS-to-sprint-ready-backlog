@@ -366,7 +366,7 @@ def get_app_settings(db: Session = Depends(get_db),
 def update_app_settings(payload: dict[str, str],
                         db: Session = Depends(get_db),
                         actor: User = Depends(require_admin)):
-    """Save settings. All values are written as provided."""
+    """Save settings. Empty string for a sensitive field means 'no change'."""
     s = get_settings()
     changed: list[str] = []
 
@@ -374,6 +374,9 @@ def update_app_settings(payload: dict[str, str],
         if key not in _SETTINGS_META:
             continue
         meta = _SETTINGS_META[key]
+
+        if meta["sensitive"] and not value:
+            continue  # blank = keep existing
 
         row = db.get(AppSetting, key)
         if row is None:

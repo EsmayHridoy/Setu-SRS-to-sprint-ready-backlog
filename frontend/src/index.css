@@ -1227,6 +1227,7 @@ select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+
 .config-actions {
   display: flex;
   align-items: center;

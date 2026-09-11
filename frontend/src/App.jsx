@@ -1285,7 +1285,7 @@ function ConfigSection() {
     api.admin.getAppSettings().then((data) => {
       setSettings(data);
       const init = {};
-      data.forEach((s) => { init[s.key] = s.value; });
+      data.forEach((s) => { init[s.key] = s.is_sensitive ? '' : s.value; });
       setValues(init);
     });
   }, []);
@@ -1303,7 +1303,7 @@ function ConfigSection() {
       const fresh = await api.admin.getAppSettings();
       setSettings(fresh);
       const next = {};
-      fresh.forEach((s) => { next[s.key] = s.value; });
+      fresh.forEach((s) => { next[s.key] = s.is_sensitive ? '' : s.value; });
       setValues(next);
     } catch (e) {
       setError(e.message);
@@ -1325,9 +1325,10 @@ function ConfigSection() {
               {!s.is_set && <span className="config-status unset">Not set</span>}
             </label>
             <input
-              type="text"
+              type={s.is_sensitive ? 'password' : 'text'}
               className="config-input"
               value={values[s.key] ?? ''}
+              placeholder={s.is_sensitive ? 'Leave blank to keep current' : ''}
               autoComplete="off"
               onChange={(e) => setValues((v) => ({ ...v, [s.key]: e.target.value }))}
             />
