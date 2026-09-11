@@ -30,9 +30,12 @@ import logging
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel
 
+from sqlalchemy.orm import Session
+
 from . import github_mcp
 from .adk_runner import build_generate_config, build_model, run_single_turn
 from .chat_memory import with_history
+from .db_settings import get_runtime_config
 
 log = logging.getLogger("setu")
 
@@ -182,7 +185,7 @@ def _parse_json(final_text: str, label: str):
 
 
 async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
-                             guidance: str = "") -> list[ExtractedBusiness]:
+                             db: Session, guidance: str = "") -> list[ExtractedBusiness]:
     """Pull a numbered list of business requirements out of a document.
 
     `guidance` is whatever the user typed alongside the upload ("only the
@@ -200,8 +203,9 @@ async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
     if guidance.strip():
         prompt = (f"The user's note about this document: {guidance.strip()}\n\n"
                   f"{prompt}")
+    cfg = get_runtime_config(db)
     agent = LlmAgent(
-        model=build_model(),
+        model=build_model(cfg),
         name="business_extractor",
         instruction=_EXTRACTION_INSTRUCTION,
         output_schema=list[ExtractedBusiness],
@@ -224,7 +228,7 @@ async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
 
 
 async def vet_business(description: str, *, user_id: str,
-                       history: str = "") -> BusinessVetting:
+                       db: Session, history: str = "") -> BusinessVetting:
     """Vet one business requirement against the live repo. Raises RuntimeError
     if GITHUB_PAT isn't configured; the caller is responsible
     for turning a per-item failure into a stored ERROR row instead of letting
@@ -233,11 +237,12 @@ async def vet_business(description: str, *, user_id: str,
     `history` is the conversation the plan was uploaded in, from
     chat_memory.build_history(); blank for a plan created outside chat.
     """
-    github_mcp.require_configured()
+    cfg = get_runtime_config(db)
+    github_mcp.require_configured(cfg)
 
-    toolset = github_mcp.build_toolset()
+    toolset = github_mcp.build_toolset(cfg)
     agent = LlmAgent(
-        model=build_model(),
+        model=build_model(cfg),
         name="business_vetter",
         instruction=_VETTING_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),

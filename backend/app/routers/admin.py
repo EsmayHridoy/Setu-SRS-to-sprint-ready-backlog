@@ -11,12 +11,45 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .. import crypto
+from ..config import get_settings
 from ..db import get_db
-from ..models import Artifact, AuditEvent, Project, Role, User
+from ..models import AppSetting, Artifact, AuditEvent, Project, Role, User
 from ..schemas import (
-    AuditOut, ProjectIn, ProjectOut, ResetPasswordIn, RoleIn, RoleOut, UserIn, UserOut,
+    AppSettingOut, AuditOut, ProjectIn, ProjectOut, ResetPasswordIn,
+    RoleIn, RoleOut, UserIn, UserOut,
 )
 from ..security import hash_password, require_admin
+
+# ---------------------------------------------------------------------------
+# Settings managed through the UI. Order determines display order in the form.
+# ---------------------------------------------------------------------------
+_SETTINGS_META: dict[str, dict] = {
+    "gemini_api_key": {
+        "label": "Google / Gemini API Key",
+        "sensitive": True,
+        "attr": "gemini_api_key",
+    },
+    "gemini_model": {
+        "label": "Gemini Model",
+        "sensitive": False,
+        "attr": "gemini_model",
+    },
+    "github_pat": {
+        "label": "GitHub Personal Access Token",
+        "sensitive": True,
+        "attr": "github_pat",
+    },
+    "github_mcp_url": {
+        "label": "GitHub MCP URL",
+        "sensitive": False,
+        "attr": "github_mcp_url",
+    },
+    "github_mcp_readonly": {
+        "label": "GitHub MCP Read-only",
+        "sensitive": False,
+        "attr": "github_mcp_readonly",
+    },
+}
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -298,6 +331,72 @@ def audit_log(limit: int = 100, db: Session = Depends(get_db),
     return (db.query(AuditEvent)
             .order_by(AuditEvent.occurred_at.desc())
             .limit(min(limit, 500)).all())
+
+
+# --- app settings ------------------------------------------------------------
+
+@router.get("/app-settings", response_model=list[AppSettingOut])
+def get_app_settings(db: Session = Depends(get_db),
+                     _: User = Depends(require_admin)):
+    """Return all configurable settings with their actual values (admin only)."""
+    s = get_settings()
+    result = []
+    for key, meta in _SETTINGS_META.items():
+        row = db.get(AppSetting, key)
+        env_val = getattr(s, meta["attr"], "")
+        if isinstance(env_val, bool):
+            env_val = str(env_val).lower()
+
+        if row and row.value:
+            current = crypto.decrypt(row.value) if meta["sensitive"] else row.value
+            current = current or ""
+        else:
+            current = env_val or ""
+
+        result.append(AppSettingOut(
+            key=key, label=meta["label"],
+            is_sensitive=meta["sensitive"],
+            is_set=bool(current),
+            value=current,
+        ))
+    return result
+
+
+@router.put("/app-settings", status_code=status.HTTP_204_NO_CONTENT)
+def update_app_settings(payload: dict[str, str],
+                        db: Session = Depends(get_db),
+                        actor: User = Depends(require_admin)):
+    """Save settings. All values are written as provided."""
+    s = get_settings()
+    changed: list[str] = []
+
+    for key, value in payload.items():
+        if key not in _SETTINGS_META:
+            continue
+        meta = _SETTINGS_META[key]
+
+        row = db.get(AppSetting, key)
+        if row is None:
+            row = AppSetting(key=key, is_sensitive=meta["sensitive"])
+            db.add(row)
+
+        stored = crypto.encrypt(value) if meta["sensitive"] else value
+        row.value = stored
+        row.updated_at = datetime.utcnow()
+        changed.append(key)
+
+        # Apply to live settings object immediately so the running process
+        # picks up the change without a restart.
+        attr = meta["attr"]
+        if attr == "github_mcp_readonly":
+            setattr(s, attr, value.lower() == "true")
+        else:
+            setattr(s, attr, value)
+
+    if changed:
+        record(db, actor, "app_settings", "global", "updated",
+               ", ".join(changed))
+        db.commit()
 
 
 # --- helpers -----------------------------------------------------------------

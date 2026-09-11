@@ -9,8 +9,10 @@ own fine-grained scope is what limits which repository can be reached.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from .. import github_agent
+from ..db import get_db
 from ..models import User
 from ..schemas import AgentPrompt, AgentReply
 from ..security import current_user
@@ -19,10 +21,11 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
 @router.post("/github", response_model=AgentReply)
-async def ask_github(payload: AgentPrompt, user: User = Depends(current_user)):
+async def ask_github(payload: AgentPrompt, user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
     """Send one prompt to the GitHub agent and return its reply."""
     try:
-        text = await github_agent.ask(payload.prompt, user_id=user.id)
+        text = await github_agent.ask(payload.prompt, user_id=user.id, db=db)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     return AgentReply(response=text)

@@ -14,14 +14,12 @@ from google.adk.tools.mcp_tool.mcp_session_manager import (
 from .config import get_settings
 
 
-def require_configured() -> None:
-    """Raise a clear error if GITHUB_PAT isn't set. No Gemini key check here
-    -- if GEMINI_API_KEY is missing the model call itself fails with a clear
-    auth error.
-    """
-    if not get_settings().github_pat:
+def require_configured(cfg: dict) -> None:
+    """Raise a user-friendly error if GITHUB_PAT isn't in the DB config."""
+    if not cfg.get("github_pat"):
         raise RuntimeError(
-            "GITHUB_PAT is not set. Add it to backend/.env -- see .env.example."
+            "GitHub Personal Access Token is not configured. "
+            "Go to Admin → Configuration to set it."
         )
 
 
@@ -147,15 +145,15 @@ def investigation_procedure() -> str:
     )
 
 
-def build_toolset() -> McpToolset:
+def build_toolset(cfg: dict) -> McpToolset:
     settings = get_settings()
     return McpToolset(
         connection_params=StreamableHTTPConnectionParams(
-            url=settings.github_mcp_url,
+            url=cfg["github_mcp_url"],
             headers={
-                "Authorization": f"Bearer {settings.github_pat}",
+                "Authorization": f"Bearer {cfg['github_pat']}",
                 "X-MCP-Toolsets": settings.github_mcp_toolsets,
-                "X-MCP-Readonly": "true" if settings.github_mcp_readonly else "false",
+                "X-MCP-Readonly": "true" if cfg["github_mcp_readonly"] else "false",
             },
             # ADK's default (5s) is too short for a remote MCP handshake and
             # was observed timing out in practice, silently leaving the agent

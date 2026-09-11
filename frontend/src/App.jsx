@@ -1241,6 +1241,8 @@ function AdminView({ loading, onRefresh, onError, roles, projects, users, audit 
             </li>
           ))}
         </ul>
+
+        <ConfigSection />
       </div>
 
       {modal && (
@@ -1268,6 +1270,77 @@ function AdminView({ loading, onRefresh, onError, roles, projects, users, audit 
           />
         </Modal>
       )}
+    </div>
+  );
+}
+
+function ConfigSection() {
+  const [settings, setSettings] = useState([]);
+  const [values, setValues] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.admin.getAppSettings().then((data) => {
+      setSettings(data);
+      const init = {};
+      data.forEach((s) => { init[s.key] = s.value; });
+      setValues(init);
+    });
+  }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    setSaved(false);
+    try {
+      await api.admin.updateAppSettings(values);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      // Reload to get updated is_set status
+      const fresh = await api.admin.getAppSettings();
+      setSettings(fresh);
+      const next = {};
+      fresh.forEach((s) => { next[s.key] = s.value; });
+      setValues(next);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="config-section">
+      <div className="section-head">
+        <h3>Configuration</h3>
+      </div>
+      <form className="config-form" onSubmit={handleSave}>
+        {settings.map((s) => (
+          <div className="config-row" key={s.key}>
+            <label className="config-label">
+              {s.label}
+              {!s.is_set && <span className="config-status unset">Not set</span>}
+            </label>
+            <input
+              type="text"
+              className="config-input"
+              value={values[s.key] ?? ''}
+              autoComplete="off"
+              onChange={(e) => setValues((v) => ({ ...v, [s.key]: e.target.value }))}
+            />
+          </div>
+        ))}
+        {error && <p className="form-error">{error}</p>}
+        <div className="config-actions">
+          {saved && <span className="config-saved">Saved</span>}
+          <button type="submit" className="save-btn" disabled={saving}>
+            {saving ? 'Saving…' : 'Save settings'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

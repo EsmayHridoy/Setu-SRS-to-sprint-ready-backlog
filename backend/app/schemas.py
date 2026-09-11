@@ -263,3 +263,13 @@ class AuditOut(ORM):
     action: str
     detail: str
     occurred_at: datetime
+
+
+# --- app settings ------------------------------------------------------------
+
+class AppSettingOut(BaseModel):
+    key: str
+    label: str
+    is_sensitive: bool
+    is_set: bool
+    value: str  # empty for sensitive fields; current value for non-sensitive

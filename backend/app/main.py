@@ -21,7 +21,7 @@ from sqlalchemy.exc import OperationalError
 
 from . import crypto
 from .config import get_settings
-from .db import engine
+from .db import SessionLocal, engine
 from .limiter import limiter
 from .routers import admin, agent, auth, business, chat, projects, uploads
 
@@ -85,9 +85,39 @@ def _check_database() -> None:
 _check_database()
 
 
+def _load_db_settings() -> None:
+    """Apply any admin-saved settings from the DB over the env-based defaults."""
+    from . import crypto as _crypto
+    from .models import AppSetting
+    from .routers.admin import _SETTINGS_META
+
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.query(AppSetting).all()
+        finally:
+            db.close()
+    except Exception:
+        return  # table may not exist yet on first run
+
+    for row in rows:
+        meta = _SETTINGS_META.get(row.key)
+        if not meta or not row.value:
+            continue
+        value = _crypto.decrypt(row.value) if meta["sensitive"] else row.value
+        if value is None:
+            continue
+        attr = meta["attr"]
+        if attr == "github_mcp_readonly":
+            setattr(settings, attr, value.lower() == "true")
+        else:
+            setattr(settings, attr, value)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Connected to %s", settings.safe_database_url)
+    _load_db_settings()
 
     if crypto.dev_key_in_use():
         log.warning(

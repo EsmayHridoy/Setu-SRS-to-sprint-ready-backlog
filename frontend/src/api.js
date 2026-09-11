@@ -225,6 +225,12 @@ export const api = {
 
     resetPassword: (id, new_password) =>
       request(`/api/admin/users/${id}/reset-password`, { method: 'POST', body: { new_password } }),
+
+    getAppSettings: () =>
+      request('/api/admin/app-settings'),
+
+    updateAppSettings: (data) =>
+      request('/api/admin/app-settings', { method: 'PUT', body: data }),
   },
 };
 

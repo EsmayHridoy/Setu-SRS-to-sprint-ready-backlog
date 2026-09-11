@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import (
-    business_agent, chat_agent, chat_memory, extraction, github_mcp,
+    business_agent, chat_agent, chat_memory, extraction,
     placeholder_ai,
 )
 from ..config import get_settings
@@ -189,7 +189,7 @@ async def send_message(conversation_id: str, payload: NewMessage,
         try:
             content = await chat_agent.answer(
                 conversation.project.name, question, user_id=user.id,
-                history=history,
+                db=db, history=history,
             )
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -279,7 +279,7 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             final_text = ""
             try:
                 async for is_final, text in chat_agent.answer_stream(
-                    project_name, question, user_id=user_id, history=history,
+                    project_name, question, user_id=user_id, db=session, history=history,
                 ):
                     if is_final:
                         final_text = text
@@ -323,11 +323,6 @@ def stream_message(conversation_id: str, payload: NewMessage,
     if get_settings().use_placeholder_ai:
         user_message, reply = _persist_exchange(db, conversation, question)
         return _reply_stream(conversation, user_message, reply)
-
-    try:
-        github_mcp.require_configured()
-    except RuntimeError as exc:
-        raise HTTPException(503, str(exc)) from exc
 
     # Read before this turn is saved, so the history is everything *but* it.
     history = chat_memory.build_history(conversation.messages)
@@ -403,7 +398,7 @@ def _plan_reply_stream(conversation: Conversation, user_message: Message,
 
             try:
                 businesses = await business_agent.extract_businesses(
-                    chunks, user_id=user_id, guidance=guidance,
+                    chunks, user_id=user_id, db=session, guidance=guidance,
                 )
             except Exception as exc:  # noqa: BLE001 - surface, don't hang the stream
                 log.warning("extract_businesses failed: %s", exc)

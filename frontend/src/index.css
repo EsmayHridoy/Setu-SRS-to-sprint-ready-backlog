@@ -1165,6 +1165,82 @@ select:focus {
   background: rgba(216, 31, 74, 0.08) !important;
 }
 
+/* ================= Config Section ================= */
+.config-section {
+  margin-top: 8px;
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.config-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.config-status {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.config-status.set {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+.config-status.unset {
+  background: rgba(216, 31, 74, 0.1);
+  color: var(--danger);
+}
+
+.config-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-family: var(--mono);
+  background: var(--bg-input);
+  color: var(--text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.config-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.config-saved {
+  font-size: 13px;
+  color: #059669;
+  font-weight: 600;
+}
+
 /* ================= Modal ================= */
 .modal-overlay {
   position: fixed;

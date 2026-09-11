@@ -292,3 +292,19 @@ class AuditEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     __table_args__ = (UniqueConstraint("id", name="uq_audit_id"),)
+
+
+# --- app settings ------------------------------------------------------------
+
+class AppSetting(Base):
+    """Admin-managed key/value configuration (API keys, model names, etc.).
+
+    Sensitive values are stored encrypted via app.crypto and never returned
+    in plain text by the API -- only whether they are set is exposed.
+    """
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    is_sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

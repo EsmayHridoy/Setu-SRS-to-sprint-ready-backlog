@@ -14,8 +14,11 @@ from __future__ import annotations
 
 from google.adk.agents import LlmAgent
 
+from sqlalchemy.orm import Session
+
 from . import github_mcp
 from .adk_runner import build_model, run_single_turn
+from .db_settings import get_runtime_config
 
 APP_NAME = "setu-github-agent"
 
@@ -28,18 +31,19 @@ _INSTRUCTION_TEMPLATE = (
 )
 
 
-async def ask(prompt: str, *, user_id: str) -> str:
+async def ask(prompt: str, *, user_id: str, db: Session) -> str:
     """Run one turn against the GitHub agent and return its final text reply.
 
     A fresh agent, MCP connection and in-memory session are built per call.
     This endpoint is low volume, and it keeps a dropped MCP connection from
     being silently reused across unrelated requests.
     """
-    github_mcp.require_configured()
+    cfg = get_runtime_config(db)
+    github_mcp.require_configured(cfg)
 
-    toolset = github_mcp.build_toolset()
+    toolset = github_mcp.build_toolset(cfg)
     agent = LlmAgent(
-        model=build_model(),
+        model=build_model(cfg),
         name="github_agent",
         instruction=_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),

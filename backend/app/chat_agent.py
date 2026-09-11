@@ -15,11 +15,14 @@ from collections.abc import AsyncIterator
 from google.adk.agents import LlmAgent
 from google.adk.tools.mcp_tool import McpToolset
 
+from sqlalchemy.orm import Session
+
 from . import github_mcp
 from .adk_runner import (
     build_generate_config, build_model, run_single_turn, stream_single_turn,
 )
 from .chat_memory import with_history
+from .db_settings import get_runtime_config
 
 APP_NAME = "setu-chat-agent"
 
@@ -80,11 +83,11 @@ _INSTRUCTION_TEMPLATE = (
 )
 
 
-def _build_agent(project_name: str) -> tuple[LlmAgent, McpToolset]:
-    github_mcp.require_configured()
-    toolset = github_mcp.build_toolset()
+def _build_agent(project_name: str, cfg: dict) -> tuple[LlmAgent, McpToolset]:
+    github_mcp.require_configured(cfg)
+    toolset = github_mcp.build_toolset(cfg)
     agent = LlmAgent(
-        model=build_model(),
+        model=build_model(cfg),
         name="chat_agent",
         instruction=_INSTRUCTION_TEMPLATE.format(
             project=project_name,
@@ -98,9 +101,10 @@ def _build_agent(project_name: str) -> tuple[LlmAgent, McpToolset]:
 
 
 async def answer(project_name: str, question: str, *, user_id: str,
-                 history: str = "") -> str:
+                 db: Session, history: str = "") -> str:
     """`history` is the conversation so far from chat_memory.build_history()."""
-    agent, toolset = _build_agent(project_name)
+    cfg = get_runtime_config(db)
+    agent, toolset = _build_agent(project_name, cfg)
     try:
         text = await run_single_turn(
             agent, with_history(history, question),
@@ -112,8 +116,9 @@ async def answer(project_name: str, question: str, *, user_id: str,
 
 
 async def answer_stream(project_name: str, question: str, *, user_id: str,
-                        history: str = "") -> AsyncIterator[tuple[bool, str]]:
-    agent, toolset = _build_agent(project_name)
+                        db: Session, history: str = "") -> AsyncIterator[tuple[bool, str]]:
+    cfg = get_runtime_config(db)
+    agent, toolset = _build_agent(project_name, cfg)
     try:
         async for is_final, text in stream_single_turn(
             agent, with_history(history, question),

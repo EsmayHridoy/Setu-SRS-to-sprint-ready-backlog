@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import business_agent, chat_memory, extraction, github_mcp
+from .. import business_agent, chat_memory, extraction
 from ..db import SessionLocal, get_db
 from ..models import BusinessItem, BusinessPlan, Message, User
 from ..schemas import (
@@ -77,7 +77,7 @@ async def create_plan(project_id: str = Form(...), file: UploadFile = File(...),
     project = authorised_project(project_id, db, user)
     data = await file.read()
     chunks = extraction.extract_with_locations(file.filename, file.content_type, data)
-    businesses = await business_agent.extract_businesses(chunks, user_id=user.id)
+    businesses = await business_agent.extract_businesses(chunks, user_id=user.id, db=db)
 
     plan = BusinessPlan(project_id=project.id, user_id=user.id,
                         source_filename=file.filename or "document")
@@ -150,8 +150,9 @@ def confirm_plan(plan_id: str, user: User = Depends(current_user),
     if not plan.items:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Add at least one business before confirming.")
+    from ..db_settings import get_runtime_config
     try:
-        github_mcp.require_configured()
+        get_runtime_config(db)  # validates all required settings are present
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
@@ -220,7 +221,7 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                 })
                 try:
                     result = await business_agent.vet_business(
-                        item.description, user_id=user_id, history=history,
+                        item.description, user_id=user_id, db=session, history=history,
                     )
                 except Exception as exc:  # noqa: BLE001 - one bad item shouldn't stop the rest
                     item.vetting_status = "ERROR"
