@@ -1329,6 +1329,39 @@ select:focus {
   color: var(--text);
 }
 
+.vet-edit-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.vet-edit-btn:hover {
+  background: var(--accent-soft);
+}
+
+.vet-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.vet-editor-actions button {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.ghost-btn.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .save-btn {
   background: var(--accent);
   border: none;
@@ -1508,7 +1541,11 @@ select:focus {
   border-color: var(--accent);
 }
 
-.vet-item.pending {
+/* Fade a waiting row's content, not the whole row: opacity would carry down
+   to its Edit button and editor and make them look disabled. */
+.vet-item.pending .vet-no,
+.vet-item.pending .vet-desc,
+.vet-item.pending .vet-state {
   opacity: 0.65;
 }
 

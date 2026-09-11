@@ -52,6 +52,6 @@ async def ask(prompt: str, *, user_id: str) -> str:
             agent, prompt, app_name=APP_NAME, user_id=user_id,
         )
     finally:
-        await toolset.close()
+        await github_mcp.close_toolset(toolset)
 
     return final_text or "The agent returned no response."

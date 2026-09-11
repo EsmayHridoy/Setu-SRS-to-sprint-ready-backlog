@@ -6,6 +6,7 @@ with this toolset can reach, not anything enforced here.
 """
 from __future__ import annotations
 
+import anyio
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import (
     StreamableHTTPConnectionParams,
@@ -163,3 +164,14 @@ def build_toolset() -> McpToolset:
             timeout=30.0,
         ),
     )
+
+
+async def close_toolset(toolset: McpToolset) -> None:
+    """Close the MCP connection even when the turn was cancelled.
+
+    Pressing Stop drops the SSE connection, and Starlette cancels the stream
+    mid-turn. Without the shield, the cancellation interrupts this close too
+    (observed: it never finishes), leaking the connection on every stop.
+    """
+    with anyio.CancelScope(shield=True):
+        await toolset.close()

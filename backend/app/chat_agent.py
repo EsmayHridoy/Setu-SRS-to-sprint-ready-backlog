@@ -107,7 +107,7 @@ async def answer(project_name: str, question: str, *, user_id: str,
             app_name=APP_NAME, user_id=user_id,
         )
     finally:
-        await toolset.close()
+        await github_mcp.close_toolset(toolset)
     return text or "The agent returned no response."
 
 
@@ -123,4 +123,4 @@ async def answer_stream(project_name: str, question: str, *, user_id: str,
         ):
             yield kind, text
     finally:
-        await toolset.close()
+        await github_mcp.close_toolset(toolset)
