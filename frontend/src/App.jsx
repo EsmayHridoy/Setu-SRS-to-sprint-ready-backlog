@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, API_BASE } from './api';
+import { api } from './api';
 import setuLogo from './assets/setu_logo.svg';
 
 const STORAGE_KEY = 'setu_user_id';
@@ -173,8 +173,11 @@ export default function App() {
       await loadConversations();
     } catch (err) {
       if (ctrl.signal.aborted) {
-        // Keep whatever was streamed; just clear the streaming flag.
-        patch(tempReplyId, (m) => ({ ...m, streaming: false }));
+        patch(tempReplyId, (m) => ({
+          ...m,
+          content: m.content || 'Response was stopped before it could complete.',
+          streaming: false,
+        }));
       } else {
         setError(err.message);
         setActiveConversation((prev) => {
