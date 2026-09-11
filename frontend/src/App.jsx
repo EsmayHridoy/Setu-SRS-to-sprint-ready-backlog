@@ -149,6 +149,13 @@ export default function App() {
     const handlers = {
       onStart: (data) => patch(tempUserId, () => data.user_message),
       onDelta: (chunk) => patch(tempReplyId, (m) => ({ ...m, content: m.content + chunk })),
+      // What the agent is doing while it works. Kept on the in-flight reply
+      // only: the saved reply from `done` replaces it without them.
+      onEvent: (event, data) => {
+        if (event === 'status') {
+          patch(tempReplyId, (m) => ({ ...m, steps: [...(m.steps || []), data.text] }));
+        }
+      },
       onDone: (data) => {
         patch(tempReplyId, () => ({ ...data.reply, streaming: false }));
         setActiveConversation((prev) =>
@@ -584,6 +591,7 @@ function Message({ m, onError, onGrow }) {
         </div>
       )}
       <div className="msg-body">
+        {!isUser && <AgentSteps steps={m.steps} active={Boolean(m.streaming) && isEmpty} />}
         {isUser ? (
           <div className="bubble">
             {parsed.doc && (
@@ -595,11 +603,13 @@ function Message({ m, onError, onGrow }) {
             {parsed.question && <div className="bubble-text">{parsed.question}</div>}
           </div>
         ) : m.streaming && isEmpty ? (
-          <div className="typing">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
+          !m.steps?.length && (
+            <div className="typing">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          )
         ) : m.business_plan_id && !m.streaming ? (
           <BusinessPlanCard planId={m.business_plan_id} onError={onError} onGrow={onGrow} />
         ) : (
@@ -629,6 +639,39 @@ function Message({ m, onError, onGrow }) {
   );
 }
 
+const VISIBLE_STEPS = 4;
+const STEPS_FADE_MS = 300;
+
+// The agent's progress lines, shown in muted text while it works and faded
+// out once the answer starts. Never stored: they live only on the in-flight
+// reply, so a reload or the saved reply leaves no trace of them.
+function AgentSteps({ steps, active }) {
+  const [wasActive, setWasActive] = useState(active);
+  const [fading, setFading] = useState(false);
+  if (wasActive !== active) {
+    setWasActive(active);
+    setFading(!active);
+  }
+
+  useEffect(() => {
+    if (!fading) return undefined;
+    const timer = setTimeout(() => setFading(false), STEPS_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [fading]);
+
+  if (!(active || fading) || !steps?.length) return null;
+  const first = Math.max(0, steps.length - VISIBLE_STEPS);
+  return (
+    <ul className={`agent-steps${active ? '' : ' leaving'}`} aria-live="polite">
+      {steps.slice(first).map((step, i) => (
+        <li key={first + i} className={active && first + i === steps.length - 1 ? 'current' : ''}>
+          {step}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const PLAN_STATUS = {
   DRAFT: 'Needs your review',
   CONFIRMED: 'Vetting',
@@ -647,6 +690,8 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
   const [busy, setBusy] = useState(false);
   const [vetting, setVetting] = useState(false);
   const [runningId, setRunningId] = useState(null);
+  const [runningStep, setRunningStep] = useState('');
+  const [editingId, setEditingId] = useState(null);
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -700,8 +745,12 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
           onEvent: (event, data) => {
             if (event === 'item_start') {
               setRunningId(data.item_id);
+              setRunningStep('');
+            } else if (event === 'item_status') {
+              setRunningStep(data.text);
             } else if (event === 'item_result') {
               setRunningId(null);
+              setRunningStep('');
               setPlan((p) => ({ ...p, items: p.items.map((i) => (i.id === data.id ? data : i)) }));
               onGrow();
             }
@@ -715,6 +764,24 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
     } finally {
       setVetting(false);
       setRunningId(null);
+      setRunningStep('');
+    }
+  }
+
+  // Dropping the stream stops the server too: the item in progress is left
+  // PENDING, so Resume vets it again and carries on with the rest.
+  function stopVetting() {
+    abortRef.current?.abort();
+  }
+
+  async function savePendingItem(itemId, description) {
+    onError('');
+    try {
+      const updated = await api.business.updatePendingItem(planId, itemId, description);
+      setPlan((p) => ({ ...p, items: p.items.map((i) => (i.id === updated.id ? updated : i)) }));
+      setEditingId(null);
+    } catch (e) {
+      onError(e.message);
     }
   }
 
@@ -756,6 +823,7 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
   }
 
   const vettedCount = plan.items.filter((i) => i.vetting_status !== 'PENDING').length;
+  const paused = plan.status === 'CONFIRMED' && !vetting;
 
   return (
     <div className="plan-card">
@@ -764,7 +832,9 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
         <span className="plan-file" title={plan.source_filename}>
           {plan.source_filename}
         </span>
-        <span className={`plan-status ${plan.status.toLowerCase()}`}>{PLAN_STATUS[plan.status]}</span>
+        <span className={`plan-status ${paused ? 'paused' : plan.status.toLowerCase()}`}>
+          {paused ? 'Paused' : PLAN_STATUS[plan.status]}
+        </span>
       </div>
 
       {plan.status === 'DRAFT' ? (
@@ -818,16 +888,41 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
           <p className="plan-intro">
             {plan.status === 'DONE'
               ? `All ${plan.items.length} vetted against the codebase.`
-              : `Vetting one at a time — ${vettedCount} of ${plan.items.length} done.`}
+              : paused
+                ? `Paused — ${vettedCount} of ${plan.items.length} vetted. You can edit any business still waiting, then resume to carry on from where it stopped.`
+                : `Vetting one at a time — ${vettedCount} of ${plan.items.length} done.`}
           </p>
           <ol className="vet-list">
             {plan.items.map((item) => (
-              <VettedItem key={item.id} item={item} running={runningId === item.id} />
+              <VettedItem
+                key={item.id}
+                item={item}
+                running={runningId === item.id}
+                step={runningId === item.id ? runningStep : ''}
+                editable={paused && item.vetting_status === 'PENDING' && !editingId}
+                editing={paused && editingId === item.id}
+                onEdit={() => setEditingId(item.id)}
+                onCancelEdit={() => setEditingId(null)}
+                onSave={(description) => savePendingItem(item.id, description)}
+              />
             ))}
           </ol>
-          {plan.status === 'CONFIRMED' && !vetting && (
+          {vetting && (
             <div className="plan-actions">
-              <button type="button" className="save-btn" onClick={startVetting}>
+              <button type="button" className="ghost-btn icon-btn" onClick={stopVetting}>
+                <StopIcon /> Stop vetting
+              </button>
+            </div>
+          )}
+          {paused && (
+            <div className="plan-actions">
+              <button
+                type="button"
+                className="save-btn"
+                onClick={startVetting}
+                disabled={Boolean(editingId)}
+                title={editingId ? 'Save or cancel your edit first' : undefined}
+              >
                 Resume vetting
               </button>
             </div>
@@ -840,19 +935,78 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
 
 const yesNo = (v) => (v == null ? '—' : v ? 'Yes' : 'No');
 
-function VettedItem({ item, running }) {
+// Rewording a business that is still waiting to be vetted, while vetting is
+// paused. Resume then vets the new wording.
+function PendingItemEditor({ initial, onSave, onCancel }) {
+  const [text, setText] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const trimmed = text.trim();
+  const rows = Math.min(12, Math.max(3, text.split('\n').length));
+
+  async function save() {
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="plan-edit-body vet-editor">
+      <textarea
+        rows={rows}
+        value={text}
+        placeholder="Describe the business requirement…"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Escape' && !saving && onCancel()}
+        disabled={saving}
+        autoFocus
+      />
+      <div className="vet-editor-actions">
+        <button type="button" className="ghost-btn" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="save-btn"
+          onClick={save}
+          disabled={saving || !trimmed || trimmed === initial.trim()}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function VettedItem({ item, running, step, editable, editing, onEdit, onCancelEdit, onSave }) {
   const state = running ? 'running' : item.vetting_status.toLowerCase();
   const label = { running: 'Vetting…', pending: 'Waiting', done: 'Done', error: 'Failed' }[state];
   return (
     <li className={`vet-item ${state}`}>
       <div className="vet-head">
         <span className="vet-no">{item.seq_no}</span>
-        <span className="vet-desc">
-          {item.description}
-          {item.location && <span className="plan-loc">{item.location}</span>}
-        </span>
+        {editing ? (
+          <PendingItemEditor initial={item.description} onSave={onSave} onCancel={onCancelEdit} />
+        ) : (
+          <span className="vet-desc">
+            {item.description}
+            {item.location && <span className="plan-loc">{item.location}</span>}
+          </span>
+        )}
+        {editable && (
+          <button type="button" className="vet-edit-btn" onClick={onEdit} title="Edit this business">
+            Edit
+          </button>
+        )}
         <span className={`vet-state ${state}`}>{label}</span>
       </div>
+      {running && step && (
+        <p className="vet-step" aria-live="polite">
+          {step}
+        </p>
+      )}
       {item.vetting_status === 'DONE' && (
         <div className="vet-body">
           <p className="vet-verdict">{item.verdict}</p>

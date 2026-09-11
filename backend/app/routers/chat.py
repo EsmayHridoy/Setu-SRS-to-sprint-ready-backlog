@@ -18,8 +18,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import (
-    business_agent, chat_agent, chat_memory, extraction, github_mcp,
-    placeholder_ai,
+    adk_runner, business_agent, chat_agent, chat_memory, extraction,
+    github_mcp, placeholder_ai,
 )
 from ..config import get_settings
 from ..db import SessionLocal, get_db
@@ -250,8 +250,9 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
                         project_name: str, question: str,
                         user_id: str, history: str) -> StreamingResponse:
     """Same start/delta/done contract as _reply_stream, but the delta text is
-    the real agent's own output as it's generated, and the reply's content
-    isn't known until the stream finishes -- so, like
+    the real agent's own output as it's generated, with `status` frames in
+    between saying what the agent is doing (see adk_runner). The reply's
+    content isn't known until the stream finishes -- so, like
     app/routers/business.py's vet_stream, this opens its own SessionLocal()
     rather than the request-scoped `db` dependency, which FastAPI closes
     before a StreamingResponse body has actually sent anything.
@@ -278,11 +279,15 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
 
             final_text = ""
             try:
-                async for is_final, text in chat_agent.answer_stream(
+                async for kind, text in chat_agent.answer_stream(
                     project_name, question, user_id=user_id, history=history,
                 ):
-                    if is_final:
+                    if kind == adk_runner.FINAL:
                         final_text = text
+                    elif kind == adk_runner.STATUS:
+                        # Shown while the agent works, then dropped: never
+                        # part of the stored reply, so never in the history.
+                        yield sse_event("status", {"text": text})
                     else:
                         yield sse_event("delta", {"text": text})
             except Exception as exc:  # noqa: BLE001 - surface, don't hang the stream
@@ -369,8 +374,8 @@ def _plan_reply_stream(conversation: Conversation, user_message: Message,
                        chunks: list[tuple[str, str]], filename: str,
                        guidance: str, user_id: str) -> StreamingResponse:
     """Extract the document's businesses into a DRAFT plan and deliver the
-    reply that presents it, over the same start/delta/done frames as
-    stream_message. The delta is a progress line shown while the model
+    reply that presents it, over the same start/status/done frames as
+    stream_message. The status is a progress line shown while the model
     reads; `done` carries the reply with its business_plan_id, which the
     client turns into the review card (confirm / discard / edit), and from
     there into per-item vetting via /api/business-plans/{id}/vet/stream.
@@ -396,9 +401,9 @@ def _plan_reply_stream(conversation: Conversation, user_message: Message,
                 "user_message": user_message_out,
                 "reply_id": reply.id,
             })
-            yield sse_event("delta", {
+            yield sse_event("status", {
                 "text": f"Reading {filename} and extracting its business "
-                        "requirements…",
+                        "requirements",
             })
 
             try:

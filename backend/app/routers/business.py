@@ -31,7 +31,8 @@ from .. import business_agent, chat_memory, extraction, github_mcp
 from ..db import SessionLocal, get_db
 from ..models import BusinessItem, BusinessPlan, Message, User
 from ..schemas import (
-    BusinessItemOut, BusinessPlanDetail, BusinessPlanItemsIn, BusinessPlanOut,
+    BusinessItemDescriptionIn, BusinessItemOut, BusinessPlanDetail,
+    BusinessPlanItemsIn, BusinessPlanOut,
 )
 from ..security import authorised_project, current_user, projects_for_user
 from ..sse import SSE_HEADERS, sse_event
@@ -140,6 +141,36 @@ def edit_items(plan_id: str, payload: BusinessPlanItemsIn,
     return _plan_detail(plan)
 
 
+@router.patch("/{plan_id}/items/{item_id}", response_model=BusinessItemOut)
+def edit_pending_item(plan_id: str, item_id: str,
+                      payload: BusinessItemDescriptionIn,
+                      user: User = Depends(current_user),
+                      db: Session = Depends(get_db)):
+    """Reword one business of a confirmed plan that is still waiting to be
+    vetted -- typically while vetting is paused. Vetted and failed items keep
+    their text, so every verdict matches the requirement it was given.
+    """
+    plan = _accessible_plan(db, plan_id, user)
+    item = db.get(BusinessItem, item_id)
+    if item is None or item.plan_id != plan.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found.")
+    if plan.status != "CONFIRMED" or item.vetting_status != "PENDING":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Only a business that is still waiting to be vetted can be changed.",
+        )
+    description = payload.description.strip()
+    if not description:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Describe the business requirement.")
+
+    item.description = description
+    plan.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return BusinessItemOut.model_validate(item)
+
+
 @router.post("/{plan_id}/confirm", response_model=BusinessPlanOut)
 def confirm_plan(plan_id: str, user: User = Depends(current_user),
                  db: Session = Depends(get_db)):
@@ -183,8 +214,9 @@ def discard_plan(plan_id: str, user: User = Depends(current_user),
 def vet_stream(plan_id: str, user: User = Depends(current_user),
                db: Session = Depends(get_db)):
     """Vet every business one at a time, streaming each verdict as it's
-    produced. Already-vetted items (from an earlier, interrupted run) are
-    replayed from the DB instead of being vetted again.
+    produced, with `item_status` progress lines while each one is vetted.
+    Already-vetted items (from an earlier, interrupted run) are replayed from
+    the DB instead of being vetted again.
     """
     plan = _accessible_plan(db, plan_id, user)
     if plan.status not in ("CONFIRMED", "DONE"):
@@ -206,6 +238,9 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
         try:
             current = session.get(BusinessPlan, plan_id)
             for item in current.items:
+                # Pick up a waiting item's latest wording -- it can be edited
+                # while vetting is paused (see edit_pending_item).
+                session.refresh(item)
                 if item.vetting_status in ("DONE", "ERROR"):
                     yield sse_event(
                         "item_result",
@@ -219,9 +254,17 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                     "description": item.description,
                 })
                 try:
-                    result = await business_agent.vet_business(
+                    async for kind, value in business_agent.vet_business_stream(
                         item.description, user_id=user_id, history=history,
-                    )
+                    ):
+                        if kind == business_agent.RESULT:
+                            result = value
+                        else:
+                            # What the agent is doing on this item right now;
+                            # shown on its row until the result replaces it.
+                            yield sse_event("item_status", {
+                                "item_id": item.id, "text": value,
+                            })
                 except Exception as exc:  # noqa: BLE001 - one bad item shouldn't stop the rest
                     item.vetting_status = "ERROR"
                     item.error_message = str(exc)
