@@ -28,6 +28,12 @@ variables:
   # on a port nothing is asking for. Leaving this empty keeps dind on plain
   # 2375, matching the CLI's own default; fine for this internal CI network.
   DOCKER_TLS_CERTDIR: ""
+  # Makes this runner create a dedicated, DNS-resolvable network per job so
+  # the dind service's `docker` alias actually resolves. Without it, some
+  # runner configs fail service-hostname lookups by falling through to an
+  # external resolver ("lookup docker on 8.8.8.8:53: no such host") instead
+  # of the job's own embedded DNS.
+  FF_NETWORK_PER_BUILD: "true"
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   VITE_API_BASE_URL: "http://localhost:8001"
