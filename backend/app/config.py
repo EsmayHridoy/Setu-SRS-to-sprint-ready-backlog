@@ -100,7 +100,7 @@ class Settings:
         # unset, app/github_agent.py refuses with a clear error at call time
         # rather than the app failing to start -- this feature is opt-in,
         # unlike DATABASE_URL above.
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3.6:27b")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "devstral:24b")
         self.ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
         # A fine-grained PAT scoped to a single repo. That scope, set when the
         # token is created on GitHub, is what limits the agent -- not this app.

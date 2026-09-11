@@ -98,13 +98,21 @@ def read_conversation(conversation_id: str,
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_conversation(conversation_id: str,
-                        user: User = Depends(current_user),
-                        db: Session = Depends(get_db)):
-    """Delete one of the caller's own conversations and its messages."""
+async def delete_conversation(conversation_id: str,
+                              user: User = Depends(current_user),
+                              db: Session = Depends(get_db)):
+    """Delete one of the caller's own conversations, its messages, and the
+    agent-side history that goes with it.
+
+    The conversation id is also the ADK session id (see chat_agent), so
+    dropping the rows here without dropping that session would leave the
+    transcript the model sees behind after the conversation is gone.
+    """
     conversation = _owned(db, conversation_id, user)
     db.delete(conversation)
     db.commit()
+    if not get_settings().use_placeholder_ai:
+        await chat_agent.forget(conversation_id, user_id=user.id)
 
 
 def _persist_user_message(db: Session, conversation: Conversation,
@@ -181,6 +189,7 @@ async def send_message(conversation_id: str, payload: NewMessage,
         try:
             content = await chat_agent.answer(
                 conversation.project.name, question, user_id=user.id,
+                conversation_id=conversation.id,
             )
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -271,6 +280,7 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             try:
                 async for is_final, text in chat_agent.answer_stream(
                     project_name, question, user_id=user_id,
+                    conversation_id=conversation_id,
                 ):
                     if is_final:
                         final_text = text

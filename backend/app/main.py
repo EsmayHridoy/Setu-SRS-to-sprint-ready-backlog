@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
 
-from . import crypto
+from . import chat_runtime, crypto
 from .config import get_settings
 from .db import engine
 from .routers import admin, agent, auth, business, chat, projects, uploads
@@ -81,7 +81,16 @@ async def lifespan(app: FastAPI):
         )
     if settings.use_placeholder_ai:
         log.info("Placeholder answers are on. No model is being called.")
-    yield
+
+    # Builds the chat agent, its GitHub MCP connection and its session store
+    # once, here, instead of once per message. No-op when there is nothing to
+    # build (placeholder mode, or no GITHUB_PAT), and degrades to a warning
+    # rather than a failed boot if the MCP server can't be reached.
+    await chat_runtime.startup()
+    try:
+        yield
+    finally:
+        await chat_runtime.shutdown()
 
 
 app = FastAPI(

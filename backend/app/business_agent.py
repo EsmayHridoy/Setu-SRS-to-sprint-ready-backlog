@@ -46,8 +46,9 @@ _EXTRACTION_INSTRUCTION = (
 
 _VETTING_INSTRUCTION_TEMPLATE = (
     "You are vetting one proposed business requirement against the actual "
-    "code in the repository. {repo_hint} {tool_list_hint} Investigate using "
-    "the tools available to you, then answer two questions:\n\n"
+    "code in the repository. {repo_hint} {tool_list_hint} {context_map_hint} "
+    "Investigate using the tools available to you, then answer two "
+    "questions:\n\n"
     "1. Is this a change to an existing business rule/feature already "
     "implemented in the repository? If yes, is it feasible to incorporate "
     "into the system as it exists today (set `change_feasible`; leave it "
@@ -133,6 +134,7 @@ async def vet_business(description: str, *, user_id: str) -> BusinessVetting:
         instruction=_VETTING_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),
             tool_list_hint=github_mcp.tool_list_hint(),
+            context_map_hint=github_mcp.context_map_hint(),
         ),
         tools=[toolset],
         output_schema=BusinessVetting,

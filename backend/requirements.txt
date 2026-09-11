@@ -1,6 +1,11 @@
 fastapi==0.141.1
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
+# SQLAlchemy needs greenlet for its async engine, which is what ADK's
+# DatabaseSessionService (app/chat_runtime.py) builds on top of DATABASE_URL.
+# SQLAlchemy declares it optional, so nothing pulls it in on its own and the
+# first chat turn fails with "the greenlet library is required".
+greenlet==3.5.5
 pydantic==2.13.5
 pydantic[email]==2.13.5
 cryptography==44.0.0

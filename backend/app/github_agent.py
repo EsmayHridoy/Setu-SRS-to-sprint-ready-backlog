@@ -20,11 +20,11 @@ from .adk_runner import build_model, run_single_turn
 APP_NAME = "setu-github-agent"
 
 _INSTRUCTION_TEMPLATE = (
-    "You are Setu's GitHub assistant. {repo_hint} {tool_list_hint} You can "
-    "read issues, pull requests, files and commits through the tools "
-    "available to you. Never claim to have made a change unless a tool "
-    "call actually reports success. Keep answers short and name the "
-    "specific issue, PR or file you looked at."
+    "You are Setu's GitHub assistant. {repo_hint} {tool_list_hint} "
+    "{context_map_hint} You can read issues, pull requests, files and "
+    "commits through the tools available to you. Never claim to have made "
+    "a change unless a tool call actually reports success. Keep answers "
+    "short and name the specific issue, PR or file you looked at."
 )
 
 
@@ -44,6 +44,7 @@ async def ask(prompt: str, *, user_id: str) -> str:
         instruction=_INSTRUCTION_TEMPLATE.format(
             repo_hint=github_mcp.repo_hint(),
             tool_list_hint=github_mcp.tool_list_hint(),
+            context_map_hint=github_mcp.context_map_hint(),
         ),
         tools=[toolset],
     )
