@@ -117,6 +117,9 @@ class MessageOut(ORM):
     role: str
     content: str
     is_placeholder: bool
+    # The plan extracted from a document uploaded in chat, if this reply
+    # presents one; the client fetches it from /api/business-plans/{id}.
+    business_plan_id: str | None = None
     created_at: datetime
     citations: list[CitationOut] = []
 

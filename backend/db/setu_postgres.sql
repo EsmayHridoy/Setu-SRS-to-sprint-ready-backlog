@@ -190,7 +190,7 @@ CREATE TABLE business_plans (
     created_at      TIMESTAMP    NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
     updated_at      TIMESTAMP    NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
     CONSTRAINT business_plans_status_check
-        CHECK (status IN ('DRAFT', 'CONFIRMED', 'DONE'))
+        CHECK (status IN ('DRAFT', 'CONFIRMED', 'DONE', 'DISCARDED'))
 );
 
 CREATE INDEX ix_business_plans_project_id ON business_plans (project_id);
@@ -219,6 +219,16 @@ CREATE TABLE business_items (
 );
 
 CREATE INDEX ix_business_items_plan_id ON business_items (plan_id);
+
+-- A document uploaded in chat produces a plan; the assistant message that
+-- presents it points back here so the chat can render the plan's review and
+-- vetting UI in place, and so later turns can recall its results. Added
+-- after business_plans exists because messages is created earlier.
+ALTER TABLE messages
+    ADD COLUMN business_plan_id VARCHAR(36)
+        REFERENCES business_plans(id) ON DELETE SET NULL;
+
+CREATE INDEX ix_messages_business_plan_id ON messages (business_plan_id);
 
 
 -- ---------------------------------------------------------------------

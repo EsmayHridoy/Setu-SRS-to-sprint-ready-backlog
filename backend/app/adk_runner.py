@@ -2,8 +2,9 @@
 
 Shared by every agent call in this app (app/github_agent.py, app/business_agent.py,
 app/chat_agent.py): build a throwaway session, run the agent once, pull text out
-of the event stream. None of them need conversation history to persist across
-calls, so a fresh InMemorySessionService per call is enough.
+of the event stream. Conversation history is folded into the prompt by the
+caller (app/chat_memory.py) rather than kept in an ADK session, so a fresh
+InMemorySessionService per call is enough.
 """
 from __future__ import annotations
 

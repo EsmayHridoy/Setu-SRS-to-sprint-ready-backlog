@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from . import github_mcp
 from .adk_runner import build_generate_config, build_model, run_single_turn
+from .chat_memory import with_history
 
 log = logging.getLogger("setu")
 
@@ -60,7 +61,12 @@ _VETTING_INSTRUCTION_TEMPLATE = (
     "Ground every claim in what you actually found through the tools -- name "
     "the specific file, function or issue/PR you looked at in your notes. "
     "Never claim to have made a change; you are only investigating. "
-    "`verdict` should be one short sentence summarising your conclusion."
+    "`verdict` should be one short sentence summarising your conclusion.\n\n"
+    "The message may open with the conversation this requirement came from, "
+    "including the other requirements extracted from the same document. Use "
+    "it only as background -- clarifications the user gave, or how this "
+    "requirement relates to its siblings -- and vet only the one requirement "
+    "under 'Current message'."
 )
 
 
@@ -87,9 +93,13 @@ def _parse_json(final_text: str, label: str):
         return None
 
 
-async def extract_businesses(chunks: list[tuple[str, str]], *,
-                             user_id: str) -> list[ExtractedBusiness]:
+async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
+                             guidance: str = "") -> list[ExtractedBusiness]:
     """Pull a numbered list of business requirements out of a document.
+
+    `guidance` is whatever the user typed alongside the upload ("only the
+    refund rules", say); it steers the extraction but never overrides the
+    rule against inventing requirements.
 
     Returns [] if the model produced nothing usable -- the human reviewing
     the draft can add items by hand before confirming, so this is never a
@@ -99,6 +109,9 @@ async def extract_businesses(chunks: list[tuple[str, str]], *,
         return []
 
     prompt = "\n\n".join(f"[{label}]\n{text}" for label, text in chunks)
+    if guidance.strip():
+        prompt = (f"The user's note about this document: {guidance.strip()}\n\n"
+                  f"{prompt}")
     agent = LlmAgent(
         model=build_model(),
         name="business_extractor",
@@ -122,11 +135,15 @@ async def extract_businesses(chunks: list[tuple[str, str]], *,
     return businesses
 
 
-async def vet_business(description: str, *, user_id: str) -> BusinessVetting:
+async def vet_business(description: str, *, user_id: str,
+                       history: str = "") -> BusinessVetting:
     """Vet one business requirement against the live repo. Raises RuntimeError
     if GITHUB_PAT isn't configured; the caller is responsible
     for turning a per-item failure into a stored ERROR row instead of letting
     it abort the whole vetting stream.
+
+    `history` is the conversation the plan was uploaded in, from
+    chat_memory.build_history(); blank for a plan created outside chat.
     """
     github_mcp.require_configured()
 
@@ -145,7 +162,8 @@ async def vet_business(description: str, *, user_id: str) -> BusinessVetting:
     )
     try:
         final_text = await run_single_turn(
-            agent, description, app_name=APP_NAME, user_id=user_id,
+            agent, with_history(history, description),
+            app_name=APP_NAME, user_id=user_id,
         )
     finally:
         await toolset.close()

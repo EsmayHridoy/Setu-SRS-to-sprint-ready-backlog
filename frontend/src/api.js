@@ -32,15 +32,17 @@ async function request(path, { method = 'GET', userId, body } = {}) {
   return data;
 }
 
-// Opens an SSE stream over POST. Pass `{ json }` for a JSON body or `{ form }`
-// for multipart (a FormData) — with FormData we must let the browser set the
-// Content-Type so the multipart boundary is included.
-async function streamSSE(path, userId, { json, form }, handlers, signal) {
+// Opens an SSE stream. Pass `{ json }` for a JSON body or `{ form }` for
+// multipart (a FormData) — with FormData we must let the browser set the
+// Content-Type so the multipart boundary is included. Pass neither for a GET.
+// fetch rather than EventSource, because EventSource can't send X-User-Id.
+async function streamSSE(path, userId, { json, form } = {}, handlers, signal) {
   const isForm = form !== undefined;
+  const hasBody = isForm || json !== undefined;
   const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: headers(userId, !isForm),
-    body: isForm ? form : JSON.stringify(json),
+    method: hasBody ? 'POST' : 'GET',
+    headers: headers(userId, hasBody && !isForm),
+    body: isForm ? form : hasBody ? JSON.stringify(json) : undefined,
     signal,
   });
 
@@ -90,6 +92,7 @@ async function streamSSE(path, userId, { json, form }, handlers, signal) {
       else if (event === 'delta') handlers.onDelta?.(data.text);
       else if (event === 'done') handlers.onDone?.(data);
       else if (event === 'error') throw new Error(data.detail || 'Stream error');
+      else handlers.onEvent?.(event, data);
     }
   }
 }
@@ -158,8 +161,9 @@ export const api = {
       signal,
     ),
 
-  // Upload a PDF/DOCX; the extracted text streams back as the assistant reply
-  // over the same SSE frames as streamMessage.
+  // Upload a PDF/DOCX over the same SSE frames as streamMessage. With the real
+  // model on, the reply carries a business_plan_id: the businesses extracted
+  // from the document, for the user to review and vet (see `business`).
   streamUpload: (userId, conversationId, file, prompt, handlers = {}, signal) => {
     const form = new FormData();
     form.append('file', file);
@@ -171,6 +175,23 @@ export const api = {
       handlers,
       signal,
     );
+  },
+
+  // Business plans: review a document's extracted businesses, then vet them.
+  business: {
+    getPlan: (userId, id) => request(`/api/business-plans/${id}`, { userId }),
+    // Replaces the draft's whole item list: [{ description, location }].
+    updateItems: (userId, id, items) =>
+      request(`/api/business-plans/${id}/items`, { method: 'PATCH', userId, body: { items } }),
+    confirm: (userId, id) =>
+      request(`/api/business-plans/${id}/confirm`, { method: 'POST', userId }),
+    discard: (userId, id) =>
+      request(`/api/business-plans/${id}/discard`, { method: 'POST', userId }),
+    // Vets one item at a time. handlers.onEvent('item_start', { item_id, ... })
+    // as each begins, onEvent('item_result', item) as each finishes (items
+    // already vetted are replayed first), then onDone(plan).
+    streamVetting: (userId, id, handlers = {}, signal) =>
+      streamSSE(`/api/business-plans/${id}/vet/stream`, userId, {}, handlers, signal),
   },
 
   // Admin

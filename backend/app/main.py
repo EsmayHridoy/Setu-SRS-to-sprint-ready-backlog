@@ -63,6 +63,18 @@ def _check_database() -> None:
         )
         raise SystemExit(1)
 
+    message_columns = {c["name"] for c in inspect(engine).get_columns("messages")}
+    if "business_plan_id" not in message_columns:
+        print(
+            "\nThe database schema is out of date: messages.business_plan_id "
+            "is missing.\n\n"
+            "  Upgrade it in place (keeps your data) with:\n\n"
+            "    psql -h 127.0.0.1 -p 5432 -d setu "
+            "-f db/migrations/001_business_plans_in_chat.sql\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 
 # Checked at import so a misconfiguration exits cleanly, before uvicorn has
 # started serving. Raising SystemExit inside the async lifespan instead would

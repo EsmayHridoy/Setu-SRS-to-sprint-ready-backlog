@@ -17,10 +17,15 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import chat_agent, extraction, github_mcp, placeholder_ai
+from .. import (
+    business_agent, chat_agent, chat_memory, extraction, github_mcp,
+    placeholder_ai,
+)
 from ..config import get_settings
 from ..db import SessionLocal, get_db
-from ..models import Citation, Conversation, Message, User
+from ..models import (
+    BusinessItem, BusinessPlan, Citation, Conversation, Message, User,
+)
 from ..schemas import (
     ConversationDetail, ConversationOut, MessageOut, NewConversation,
     NewMessage, SendMessageResult,
@@ -108,17 +113,18 @@ def delete_conversation(conversation_id: str,
 
 
 def _persist_user_message(db: Session, conversation: Conversation,
-                          question: str) -> Message:
-    """Persist the user's turn and title the conversation from it if it's
-    still untitled. Shared by every path that starts an exchange, whether
-    the reply comes from the placeholder or the real agent.
+                          question: str, *, title_from: str = "") -> Message:
+    """Persist the user's turn and title the conversation from it (or from
+    `title_from`, if given) if it's still untitled. Shared by every path
+    that starts an exchange, whether the reply comes from the placeholder
+    or the real agent.
     """
     user_message = Message(conversation_id=conversation.id, role="USER",
                            content=question)
     db.add(user_message)
 
     if conversation.title == "New conversation":
-        conversation.title = placeholder_ai.title_for(question)
+        conversation.title = placeholder_ai.title_for(title_from or question)
 
     db.commit()
     db.refresh(user_message)
@@ -177,10 +183,13 @@ async def send_message(conversation_id: str, payload: NewMessage,
     if get_settings().use_placeholder_ai:
         user_message, reply = _persist_exchange(db, conversation, question)
     else:
+        # Read before this turn is saved, so the history is everything *but* it.
+        history = chat_memory.build_history(conversation.messages)
         user_message = _persist_user_message(db, conversation, question)
         try:
             content = await chat_agent.answer(
                 conversation.project.name, question, user_id=user.id,
+                history=history,
             )
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -239,7 +248,7 @@ def _reply_stream(conversation: Conversation, user_message: Message,
 
 def _agent_reply_stream(conversation: Conversation, user_message: Message,
                         project_name: str, question: str,
-                        user_id: str) -> StreamingResponse:
+                        user_id: str, history: str) -> StreamingResponse:
     """Same start/delta/done contract as _reply_stream, but the delta text is
     the real agent's own output as it's generated, and the reply's content
     isn't known until the stream finishes -- so, like
@@ -270,7 +279,7 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             final_text = ""
             try:
                 async for is_final, text in chat_agent.answer_stream(
-                    project_name, question, user_id=user_id,
+                    project_name, question, user_id=user_id, history=history,
                 ):
                     if is_final:
                         final_text = text
@@ -320,9 +329,111 @@ def stream_message(conversation_id: str, payload: NewMessage,
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 
+    # Read before this turn is saved, so the history is everything *but* it.
+    history = chat_memory.build_history(conversation.messages)
     user_message = _persist_user_message(db, conversation, question)
     return _agent_reply_stream(conversation, user_message,
-                               conversation.project.name, question, user.id)
+                               conversation.project.name, question, user.id,
+                               history)
+
+
+def _upload_note(filename: str, prompt: str) -> str:
+    """The user turn for an upload: a marker the client renders as a file
+    chip, then whatever they typed alongside it."""
+    note = f"[Uploaded document: {filename}]"
+    if prompt.strip():
+        note += f"\n\n{prompt.strip()}"
+    return note
+
+
+def _plan_summary(filename: str,
+                  businesses: list[business_agent.ExtractedBusiness]) -> str:
+    """The text of the reply that presents a plan. The chat renders the plan
+    itself in its place (editable, then vetted in place); this is what shows
+    anywhere that doesn't know about plans."""
+    if not businesses:
+        return (f"I could not find distinct business requirements in "
+                f"{filename}. Add them by hand, then confirm to vet them "
+                "against the codebase.")
+    lines = [f"I found {len(businesses)} business requirement"
+             f"{'' if len(businesses) == 1 else 's'} in {filename}:", ""]
+    for seq_no, business in enumerate(businesses, start=1):
+        where = f" ({business.location})" if business.location else ""
+        lines.append(f"{seq_no}. {business.description}{where}")
+    lines += ["", "Review the list -- edit, remove or add items -- then "
+                  "confirm to vet each one against the codebase."]
+    return "\n".join(lines)
+
+
+def _plan_reply_stream(conversation: Conversation, user_message: Message,
+                       chunks: list[tuple[str, str]], filename: str,
+                       guidance: str, user_id: str) -> StreamingResponse:
+    """Extract the document's businesses into a DRAFT plan and deliver the
+    reply that presents it, over the same start/delta/done frames as
+    stream_message. The delta is a progress line shown while the model
+    reads; `done` carries the reply with its business_plan_id, which the
+    client turns into the review card (confirm / discard / edit), and from
+    there into per-item vetting via /api/business-plans/{id}/vet/stream.
+
+    Opens its own SessionLocal() for the same reason _agent_reply_stream does.
+    """
+    conversation_out = _out(conversation).model_dump(mode="json")
+    user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
+    conversation_id = conversation.id
+
+    async def event_stream():
+        session = SessionLocal()
+        try:
+            conv = session.get(Conversation, conversation_id)
+            reply = Message(conversation_id=conv.id, role="ASSISTANT",
+                            content="", is_placeholder=False)
+            session.add(reply)
+            session.commit()
+            session.refresh(reply)
+
+            yield sse_event("start", {
+                "conversation": conversation_out,
+                "user_message": user_message_out,
+                "reply_id": reply.id,
+            })
+            yield sse_event("delta", {
+                "text": f"Reading {filename} and extracting its business "
+                        "requirements…",
+            })
+
+            try:
+                businesses = await business_agent.extract_businesses(
+                    chunks, user_id=user_id, guidance=guidance,
+                )
+            except Exception as exc:  # noqa: BLE001 - surface, don't hang the stream
+                log.warning("extract_businesses failed: %s", exc)
+                reply.content = (f"I could not extract business requirements "
+                                 f"from {filename}: {exc}")
+            else:
+                plan = BusinessPlan(project_id=conv.project_id, user_id=user_id,
+                                    source_filename=filename)
+                session.add(plan)
+                session.flush()
+                for seq_no, business in enumerate(businesses, start=1):
+                    session.add(BusinessItem(plan_id=plan.id, seq_no=seq_no,
+                                             description=business.description,
+                                             location=business.location))
+                reply.business_plan_id = plan.id
+                reply.content = _plan_summary(filename, businesses)
+
+            conv.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(reply)
+
+            yield sse_event("done", {
+                "conversation": _out(conv).model_dump(mode="json"),
+                "reply": MessageOut.model_validate(reply).model_dump(mode="json"),
+            })
+        finally:
+            session.close()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers=SSE_HEADERS)
 
 
 @router.post("/{conversation_id}/messages/upload")
@@ -331,22 +442,35 @@ async def upload_message(conversation_id: str,
                          prompt: str = Form(""),
                          user: User = Depends(current_user),
                          db: Session = Depends(get_db)):
-    """Upload a PDF/DOCX and stream its extracted text back as the assistant
-    reply. The user turn records that a document was uploaded (plus any typed
-    prompt); the assistant turn is the extracted context itself, delivered over
-    the same SSE frames as `stream_message`.
+    """Upload a PDF/DOCX. The user turn records the upload (plus any typed
+    prompt); the reply streams over the same SSE frames as `stream_message`.
+
+    With the real model on, the reply presents a draft business plan
+    extracted from the document -- see _plan_reply_stream. With
+    USE_PLACEHOLDER_AI true there is no model to extract with, so the reply
+    is the document's extracted text instead.
     """
     conversation = _owned(db, conversation_id, user)
-
     data = await file.read()
+
+    if not get_settings().use_placeholder_ai:
+        # Validates type, size and readable text up front, so a bad file is
+        # a clean 4xx rather than an error halfway through a stream.
+        chunks = extraction.extract_with_locations(
+            file.filename, file.content_type, data)
+        filename = file.filename or "document"
+        user_message = _persist_user_message(
+            db, conversation, _upload_note(filename, prompt),
+            title_from=prompt.strip() or filename,
+        )
+        return _plan_reply_stream(conversation, user_message, chunks,
+                                  filename, prompt, user.id)
+
     kind, text, truncated = extraction.extract(file.filename, file.content_type, data)
     filename = file.filename or f"document.{kind}"
 
-    note = f"[Uploaded document: {filename}]"
-    if prompt.strip():
-        note += f"\n\n{prompt.strip()}"
     user_message = Message(conversation_id=conversation.id, role="USER",
-                           content=note)
+                           content=_upload_note(filename, prompt))
     db.add(user_message)
 
     if conversation.title == "New conversation":

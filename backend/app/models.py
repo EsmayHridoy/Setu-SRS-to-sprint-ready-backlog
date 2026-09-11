@@ -163,11 +163,17 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text)
     # Set when the reply came from the placeholder generator rather than a model.
     is_placeholder: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set on the assistant reply to a document uploaded in chat: the plan of
+    # businesses extracted from it, reviewed and vetted in place in the thread.
+    business_plan_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("business_plans.id", ondelete="SET NULL"),
+        nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     conversation = relationship("Conversation", back_populates="messages")
     citations = relationship("Citation", back_populates="message",
                              cascade="all, delete-orphan")
+    business_plan = relationship("BusinessPlan", lazy="selectin")
 
 
 class Citation(Base):
@@ -202,7 +208,7 @@ class BusinessPlan(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"))
     source_filename: Mapped[str] = mapped_column(String(300), default="")
-    status: Mapped[str] = mapped_column(String(20), default="DRAFT")  # DRAFT | CONFIRMED | DONE
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT")  # DRAFT | CONFIRMED | DONE | DISCARDED
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

@@ -1158,6 +1158,250 @@ select:focus {
   cursor: not-allowed;
 }
 
+/* ================= Business plan card (document upload in chat) ================= */
+.plan-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.plan-head svg {
+  flex-shrink: 0;
+}
+
+.plan-file {
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.plan-status.draft,
+.plan-status.confirmed {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.plan-status.done {
+  background: #e3f4ea;
+  color: #1c7a45;
+}
+
+.plan-intro {
+  margin: 10px 0 12px;
+}
+
+.plan-intro.muted {
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
+
+.plan-loc {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.plan-edit-list,
+.vet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-edit-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.plan-edit-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-edit-body textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+
+.plan-edit-body textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.plan-edit-body .plan-loc {
+  margin-left: 2px;
+}
+
+.plan-remove {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 8px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.plan-remove:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--bg-hover);
+}
+
+.plan-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  background: none;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.plan-add:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.plan-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.vet-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.vet-item.running {
+  border-color: var(--accent);
+}
+
+.vet-item.pending {
+  opacity: 0.65;
+}
+
+.vet-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.vet-no {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+}
+
+.vet-desc {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.vet-state {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  margin-top: 3px;
+}
+
+.vet-state.running {
+  color: var(--accent);
+}
+
+.vet-state.done {
+  color: #1c7a45;
+}
+
+.vet-state.error {
+  color: var(--danger);
+}
+
+.vet-body {
+  margin: 8px 0 0 32px;
+}
+
+.vet-verdict {
+  margin: 0 0 8px;
+}
+
+.vet-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.vet-label {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.vet-notes {
+  margin: 2px 0 0;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.vet-error {
+  margin: 8px 0 0 32px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 /* Scrollbars */
 .conv-scroll::-webkit-scrollbar,
 .thread::-webkit-scrollbar,

@@ -388,7 +388,13 @@ export default function App() {
             <div className="thread">
               <div className="thread-inner">
                 {messages.map((m) => (
-                  <Message key={m.id} m={m} />
+                  <Message
+                    key={m.id}
+                    m={m}
+                    userId={userId}
+                    onError={setError}
+                    onGrow={() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  />
                 ))}
                 <div ref={threadEndRef} />
               </div>
@@ -460,7 +466,7 @@ function parseUserContent(content) {
   return { question: content, doc: null };
 }
 
-function Message({ m }) {
+function Message({ m, userId, onError, onGrow }) {
   const isUser = m.role?.toLowerCase() === 'user';
   const isEmpty = !m.content;
   const parsed = isUser ? parseUserContent(m.content) : null;
@@ -484,6 +490,10 @@ function Message({ m }) {
             <span></span>
             <span></span>
           </div>
+        ) : m.business_plan_id && !m.streaming ? (
+          // The reply's text is the plan's plain-text summary (kept for the
+          // agent's memory); the card is the interactive version of it.
+          <BusinessPlanCard planId={m.business_plan_id} userId={userId} onError={onError} onGrow={onGrow} />
         ) : (
           <>
             <div className="msg-text">
@@ -508,6 +518,267 @@ function Message({ m }) {
         )}
       </div>
     </div>
+  );
+}
+
+const PLAN_STATUS = {
+  DRAFT: 'Needs your review',
+  CONFIRMED: 'Vetting',
+  DONE: 'Vetted',
+  DISCARDED: 'Discarded',
+};
+
+let draftKey = 0;
+const toDraft = (items) =>
+  items.map((i) => ({ key: i.id, description: i.description, location: i.location }));
+
+// The businesses extracted from a document uploaded in chat. While DRAFT the
+// user reviews them — yes (confirm), no (discard), or edit/remove/add — and
+// once confirmed each is vetted against the repo one at a time, its result
+// shown the moment it arrives over SSE. Reopening a half-vetted plan offers
+// to resume; the server replays finished items and carries on from there.
+function BusinessPlanCard({ planId, userId, onError, onGrow }) {
+  const [plan, setPlan] = useState(null);
+  const [draft, setDraft] = useState([]);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [vetting, setVetting] = useState(false);
+  const [runningId, setRunningId] = useState(null);
+  const abortRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.business
+      .getPlan(userId, planId)
+      .then((p) => {
+        if (cancelled) return;
+        setPlan(p);
+        setDraft(toDraft(p.items));
+      })
+      .catch((e) => onError(e.message));
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
+  }, [planId, userId, onError]);
+
+  if (!plan) {
+    return (
+      <div className="typing">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    );
+  }
+
+  const editItem = (key, description) => {
+    setDraft((d) => d.map((it) => (it.key === key ? { ...it, description } : it)));
+    setDirty(true);
+  };
+  const removeItem = (key) => {
+    setDraft((d) => d.filter((it) => it.key !== key));
+    setDirty(true);
+  };
+  const addItem = () => {
+    setDraft((d) => [...d, { key: `new-${++draftKey}`, description: '', location: '' }]);
+    setDirty(true);
+  };
+  const kept = draft.filter((it) => it.description.trim());
+
+  async function startVetting() {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setVetting(true);
+    try {
+      await api.business.streamVetting(
+        userId,
+        planId,
+        {
+          onEvent: (event, data) => {
+            if (event === 'item_start') {
+              setRunningId(data.item_id);
+            } else if (event === 'item_result') {
+              setRunningId(null);
+              setPlan((p) => ({ ...p, items: p.items.map((i) => (i.id === data.id ? data : i)) }));
+              onGrow();
+            }
+          },
+          // `done` carries the plan without its items; keep the ones we have.
+          onDone: (data) => setPlan((p) => ({ ...p, ...data })),
+        },
+        controller.signal,
+      );
+    } catch (e) {
+      if (e.name !== 'AbortError') onError(e.message);
+    } finally {
+      setVetting(false);
+      setRunningId(null);
+    }
+  }
+
+  async function confirm() {
+    setBusy(true);
+    onError('');
+    try {
+      let current = plan;
+      if (dirty) {
+        current = await api.business.updateItems(
+          userId,
+          planId,
+          kept.map(({ description, location }) => ({ description: description.trim(), location })),
+        );
+        setDraft(toDraft(current.items));
+        setDirty(false);
+      }
+      const confirmed = await api.business.confirm(userId, planId);
+      setPlan({ ...current, ...confirmed });
+    } catch (e) {
+      onError(e.message);
+      return;
+    } finally {
+      setBusy(false);
+    }
+    startVetting();
+  }
+
+  async function discard() {
+    setBusy(true);
+    onError('');
+    try {
+      const discarded = await api.business.discard(userId, planId);
+      setPlan((p) => ({ ...p, ...discarded }));
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const vettedCount = plan.items.filter((i) => i.vetting_status !== 'PENDING').length;
+
+  return (
+    <div className="plan-card">
+      <div className="plan-head">
+        <PaperclipIcon />
+        <span className="plan-file" title={plan.source_filename}>
+          {plan.source_filename}
+        </span>
+        <span className={`plan-status ${plan.status.toLowerCase()}`}>{PLAN_STATUS[plan.status]}</span>
+      </div>
+
+      {plan.status === 'DRAFT' ? (
+        <>
+          <p className="plan-intro">
+            {plan.items.length
+              ? `I found ${plan.items.length} business requirement${plan.items.length === 1 ? '' : 's'}. Is this list right? Edit, remove or add any, then confirm to vet each one against the codebase.`
+              : 'I could not find distinct business requirements in this document. Add them below, then confirm to vet them against the codebase.'}
+          </p>
+          <ol className="plan-edit-list">
+            {draft.map((it) => (
+              <li key={it.key}>
+                <div className="plan-edit-body">
+                  <textarea
+                    rows={2}
+                    value={it.description}
+                    placeholder="Describe the business requirement…"
+                    onChange={(e) => editItem(it.key, e.target.value)}
+                    disabled={busy}
+                  />
+                  {it.location && <span className="plan-loc">{it.location}</span>}
+                </div>
+                <button
+                  type="button"
+                  className="plan-remove"
+                  onClick={() => removeItem(it.key)}
+                  disabled={busy}
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ol>
+          <button type="button" className="plan-add" onClick={addItem} disabled={busy}>
+            <PlusIcon /> Add a business
+          </button>
+          <div className="plan-actions">
+            <button type="button" className="ghost-btn" onClick={discard} disabled={busy}>
+              No, discard
+            </button>
+            <button type="button" className="save-btn" onClick={confirm} disabled={busy || !kept.length}>
+              {busy ? 'Starting…' : `Yes, vet ${kept.length}`}
+            </button>
+          </div>
+        </>
+      ) : plan.status === 'DISCARDED' ? (
+        <p className="plan-intro muted">Discarded — nothing from this document was vetted.</p>
+      ) : (
+        <>
+          <p className="plan-intro">
+            {plan.status === 'DONE'
+              ? `All ${plan.items.length} vetted against the codebase.`
+              : `Vetting one at a time — ${vettedCount} of ${plan.items.length} done.`}
+          </p>
+          <ol className="vet-list">
+            {plan.items.map((item) => (
+              <VettedItem key={item.id} item={item} running={runningId === item.id} />
+            ))}
+          </ol>
+          {plan.status === 'CONFIRMED' && !vetting && (
+            <div className="plan-actions">
+              <button type="button" className="save-btn" onClick={startVetting}>
+                Resume vetting
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+const yesNo = (v) => (v == null ? '—' : v ? 'Yes' : 'No');
+
+function VettedItem({ item, running }) {
+  const state = running ? 'running' : item.vetting_status.toLowerCase();
+  const label = { running: 'Vetting…', pending: 'Waiting', done: 'Done', error: 'Failed' }[state];
+  return (
+    <li className={`vet-item ${state}`}>
+      <div className="vet-head">
+        <span className="vet-no">{item.seq_no}</span>
+        <span className="vet-desc">
+          {item.description}
+          {item.location && <span className="plan-loc">{item.location}</span>}
+        </span>
+        <span className={`vet-state ${state}`}>{label}</span>
+      </div>
+      {item.vetting_status === 'DONE' && (
+        <div className="vet-body">
+          <p className="vet-verdict">{item.verdict}</p>
+          <div className="vet-flags">
+            <span className="pill">Changes existing business: {yesNo(item.is_existing_business_change)}</span>
+            {item.is_existing_business_change && (
+              <span className="pill">Feasible: {yesNo(item.change_feasible)}</span>
+            )}
+            <span className="pill">Impacts other features: {yesNo(item.impacts_other_features)}</span>
+          </div>
+          {item.feasibility_notes && (
+            <>
+              <div className="vet-label">Feasibility</div>
+              <p className="vet-notes">{item.feasibility_notes}</p>
+            </>
+          )}
+          {item.impact_notes && (
+            <>
+              <div className="vet-label">Impact</div>
+              <p className="vet-notes">{item.impact_notes}</p>
+            </>
+          )}
+        </div>
+      )}
+      {item.vetting_status === 'ERROR' && <p className="vet-error">{item.error_message}</p>}
+    </li>
   );
 }
 

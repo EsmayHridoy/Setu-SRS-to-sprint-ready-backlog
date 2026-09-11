@@ -19,6 +19,7 @@ from . import github_mcp
 from .adk_runner import (
     build_generate_config, build_model, run_single_turn, stream_single_turn,
 )
+from .chat_memory import with_history
 
 APP_NAME = "setu-chat-agent"
 
@@ -57,7 +58,13 @@ _INSTRUCTION_TEMPLATE = (
     "When you assess whether a requirement is possible, use exactly these "
     "headings in order: 'Summary:', 'Currently Supported:', 'Feasibility:', "
     "'Business Impact:'. Under each, a few short points, all in business "
-    "language."
+    "language.\n\n"
+    "The message may open with the conversation so far. Use it to resolve "
+    "what the user is referring to (\"that rule\", \"the second requirement\", "
+    "an earlier answer) and to build on earlier turns -- including business "
+    "requirements extracted from documents they uploaded and the vetting "
+    "results for them -- instead of starting from scratch. Answer only the "
+    "current message; do not repeat or re-answer earlier ones."
 )
 
 
@@ -78,23 +85,27 @@ def _build_agent(project_name: str) -> tuple[LlmAgent, McpToolset]:
     return agent, toolset
 
 
-async def answer(project_name: str, question: str, *, user_id: str) -> str:
+async def answer(project_name: str, question: str, *, user_id: str,
+                 history: str = "") -> str:
+    """`history` is the conversation so far from chat_memory.build_history()."""
     agent, toolset = _build_agent(project_name)
     try:
         text = await run_single_turn(
-            agent, question, app_name=APP_NAME, user_id=user_id,
+            agent, with_history(history, question),
+            app_name=APP_NAME, user_id=user_id,
         )
     finally:
         await toolset.close()
     return text or "The agent returned no response."
 
 
-async def answer_stream(project_name: str, question: str, *,
-                        user_id: str) -> AsyncIterator[tuple[bool, str]]:
+async def answer_stream(project_name: str, question: str, *, user_id: str,
+                        history: str = "") -> AsyncIterator[tuple[bool, str]]:
     agent, toolset = _build_agent(project_name)
     try:
         async for is_final, text in stream_single_turn(
-            agent, question, app_name=APP_NAME, user_id=user_id,
+            agent, with_history(history, question),
+            app_name=APP_NAME, user_id=user_id,
         ):
             yield is_final, text
     finally:

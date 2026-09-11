@@ -27,9 +27,9 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import business_agent, extraction, github_mcp
+from .. import business_agent, chat_memory, extraction, github_mcp
 from ..db import SessionLocal, get_db
-from ..models import BusinessItem, BusinessPlan, User
+from ..models import BusinessItem, BusinessPlan, Message, User
 from ..schemas import (
     BusinessItemOut, BusinessPlanDetail, BusinessPlanItemsIn, BusinessPlanOut,
 )
@@ -37,6 +37,9 @@ from ..security import authorised_project, current_user, projects_for_user
 from ..sse import SSE_HEADERS, sse_event
 
 router = APIRouter(prefix="/api/business-plans", tags=["business-plans"])
+
+# Smaller than a chat turn's: it is sent once per item, not once per plan.
+VETTING_HISTORY_CHARS = 12_000
 
 
 def _accessible_plan(db: Session, plan_id: str, user: User) -> BusinessPlan:
@@ -159,6 +162,23 @@ def confirm_plan(plan_id: str, user: User = Depends(current_user),
     return _plan_out(plan)
 
 
+@router.post("/{plan_id}/discard", response_model=BusinessPlanOut)
+def discard_plan(plan_id: str, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """The "no" answer to a draft: nothing gets vetted. The plan is kept, not
+    deleted, so a chat it came from still remembers it was turned down."""
+    plan = _accessible_plan(db, plan_id, user)
+    if plan.status != "DRAFT":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Only a plan that hasn't been confirmed can be "
+                            "discarded.")
+    plan.status = "DISCARDED"
+    plan.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(plan)
+    return _plan_out(plan)
+
+
 @router.get("/{plan_id}/vet/stream")
 def vet_stream(plan_id: str, user: User = Depends(current_user),
                db: Session = Depends(get_db)):
@@ -172,6 +192,14 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                             "Confirm the plan before vetting it.")
 
     user_id = user.id
+    # A plan uploaded in chat is vetted with that chat as background --
+    # clarifications the user gave, and the plan's other items. Read once,
+    # up front, while the request's session is still open.
+    origin = (db.query(Message)
+              .filter(Message.business_plan_id == plan.id).first())
+    history = (chat_memory.build_history(origin.conversation.messages,
+                                         budget=VETTING_HISTORY_CHARS)
+               if origin else "")
 
     async def event_stream():
         session = SessionLocal()
@@ -192,7 +220,7 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                 })
                 try:
                     result = await business_agent.vet_business(
-                        item.description, user_id=user_id,
+                        item.description, user_id=user_id, history=history,
                     )
                 except Exception as exc:  # noqa: BLE001 - one bad item shouldn't stop the rest
                     item.vetting_status = "ERROR"
