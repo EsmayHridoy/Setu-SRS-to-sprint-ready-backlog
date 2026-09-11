@@ -92,7 +92,7 @@ def _build_agent(project_name: str) -> tuple[LlmAgent, McpToolset]:
             procedure=github_mcp.investigation_procedure(),
         ),
         tools=[toolset],
-        generate_content_config=build_generate_config(),
+        generate_content_config=build_generate_config(show_thinking=True),
     )
     return agent, toolset
 
@@ -112,13 +112,15 @@ async def answer(project_name: str, question: str, *, user_id: str,
 
 
 async def answer_stream(project_name: str, question: str, *, user_id: str,
-                        history: str = "") -> AsyncIterator[tuple[bool, str]]:
+                        history: str = "") -> AsyncIterator[tuple[str, str]]:
+    """(kind, text) pairs from adk_runner.stream_single_turn: STATUS progress
+    lines, DELTA pieces of the answer, then the FINAL answer."""
     agent, toolset = _build_agent(project_name)
     try:
-        async for is_final, text in stream_single_turn(
+        async for kind, text in stream_single_turn(
             agent, with_history(history, question),
             app_name=APP_NAME, user_id=user_id,
         ):
-            yield is_final, text
+            yield kind, text
     finally:
         await toolset.close()

@@ -9,7 +9,7 @@ Exceptions -- so one Story is kept as one item, verbatim, rather than
 compressed into a single sentence. Free-form SRS prose without that
 structure is still distilled into one-sentence items as before.
 
-`vet_business` takes one of those and checks it against the live GitHub repo
+`vet_business_stream` takes one of those and checks it against the live GitHub repo
 (through the same GITHUB_PAT-authenticated MCP connection app/github_agent.py
 uses), responding in the BA's own template vocabulary -- User Story, Actors,
 Pre-condition, Impacted Areas, Requirements, Acceptance Criteria, Exceptions
@@ -26,17 +26,24 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel
 
 from . import github_mcp
-from .adk_runner import build_generate_config, build_model, run_single_turn
+from .adk_runner import (
+    FINAL, STATUS, build_generate_config, build_model, iter_turn,
+    run_single_turn,
+)
 from .chat_memory import with_history
 
 log = logging.getLogger("setu")
 
 APP_NAME = "setu-business-agent"
+
+# The last pair vet_business_stream yields, carrying the BusinessVetting.
+RESULT = "result"
 
 _EXTRACTION_INSTRUCTION = (
     "You are extracting business requirements from a document for a "
@@ -223,12 +230,15 @@ async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
     return businesses
 
 
-async def vet_business(description: str, *, user_id: str,
-                       history: str = "") -> BusinessVetting:
-    """Vet one business requirement against the live repo. Raises RuntimeError
-    if GITHUB_PAT isn't configured; the caller is responsible
-    for turning a per-item failure into a stored ERROR row instead of letting
-    it abort the whole vetting stream.
+async def vet_business_stream(description: str, *, user_id: str,
+                              history: str = "",
+                              ) -> AsyncIterator[tuple[str, str | BusinessVetting]]:
+    """Vet one business requirement against the live repo, yielding
+    (adk_runner.STATUS, line) progress lines while the agent investigates,
+    then (RESULT, BusinessVetting) last. Raises RuntimeError if GITHUB_PAT
+    isn't configured; the caller is responsible for turning a per-item
+    failure into a stored ERROR row instead of letting it abort the whole
+    vetting stream.
 
     `history` is the conversation the plan was uploaded in, from
     chat_memory.build_history(); blank for a plan created outside chat.
@@ -245,13 +255,18 @@ async def vet_business(description: str, *, user_id: str,
         ),
         tools=[toolset],
         output_schema=BusinessVetting,
-        generate_content_config=build_generate_config(),
+        generate_content_config=build_generate_config(show_thinking=True),
     )
+    final_text = ""
     try:
-        final_text = await run_single_turn(
+        async for kind, text in iter_turn(
             agent, with_history(history, description),
             app_name=APP_NAME, user_id=user_id,
-        )
+        ):
+            if kind == STATUS:
+                yield STATUS, text
+            elif kind == FINAL:
+                final_text = text
     finally:
         await toolset.close()
 
@@ -261,4 +276,4 @@ async def vet_business(description: str, *, user_id: str,
             "The vetting agent's response could not be parsed as structured "
             "output."
         )
-    return BusinessVetting.model_validate(parsed)
+    yield RESULT, BusinessVetting.model_validate(parsed)
