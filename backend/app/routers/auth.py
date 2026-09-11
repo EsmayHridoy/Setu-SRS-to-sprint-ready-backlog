@@ -22,7 +22,7 @@ router = APIRouter(tags=["session"])
 
 
 @router.post("/api/auth/login", response_model=TokenOut)
-@limiter.limit("3/15minutes")
+@limiter.limit("5/5minutes")
 def login(request: Request, payload: LoginIn, db: Session = Depends(get_db)):
     """Issue a JWT for valid credentials. No registration — admin creates accounts."""
     user = db.query(User).filter(User.email == str(payload.email)).first()

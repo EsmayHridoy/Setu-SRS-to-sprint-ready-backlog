@@ -234,7 +234,7 @@ export default function App() {
           } catch (e) {
             setToken('');
             if (e.message.startsWith('429')) {
-              setError('Too many login attempts. Please wait 15 minutes and try again.');
+              setError('Too many login attempts. Please wait 5 minutes and try again.');
             } else {
               setError(e.message.replace(/^\d+: /, ''));
             }
