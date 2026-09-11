@@ -487,7 +487,11 @@ function Message({ m }) {
   const parsed = isUser ? parseUserContent(m.content) : null;
   return (
     <div className={`msg ${isUser ? 'user' : 'assistant'}`}>
-      {!isUser && <div className="msg-avatar">S</div>}
+      {!isUser && (
+        <div className="msg-avatar">
+          <img src="/favicon.svg" alt="Setu" className="msg-avatar-icon" />
+        </div>
+      )}
       <div className="msg-body">
         {isUser ? (
           <div className="bubble">

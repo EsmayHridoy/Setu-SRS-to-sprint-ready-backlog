@@ -560,14 +560,17 @@ select:focus {
   height: 28px;
   flex-shrink: 0;
   border-radius: 7px;
-  background: var(--accent);
-  color: #fff;
+  background: #0c1828;
   display: grid;
   place-items: center;
-  font-family: var(--display);
-  font-size: 14px;
-  font-weight: 600;
   margin-top: 2px;
+  overflow: hidden;
+}
+
+.msg-avatar-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
 }
 
 .msg-body {
