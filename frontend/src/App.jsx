@@ -785,23 +785,53 @@ function VettedItem({ item, running }) {
       {item.vetting_status === 'DONE' && (
         <div className="vet-body">
           <p className="vet-verdict">{item.verdict}</p>
+
           <div className="vet-flags">
-            <span className="pill">Changes existing business: {yesNo(item.is_existing_business_change)}</span>
-            {item.is_existing_business_change && (
-              <span className="pill">Feasible: {yesNo(item.change_feasible)}</span>
-            )}
-            <span className="pill">Impacts other features: {yesNo(item.impacts_other_features)}</span>
+            <span className="pill">Requirement clear: {yesNo(item.is_requirement_clear)}</span>
+            <span className="pill">Feasible: {yesNo(item.is_feasible)}</span>
+            <span className="pill">Already supported: {yesNo(item.already_supported)}</span>
           </div>
-          {item.feasibility_notes && (
+
+          {item.user_story && (
             <>
-              <div className="vet-label">Feasibility</div>
-              <p className="vet-notes">{item.feasibility_notes}</p>
+              <div className="vet-label">User Story</div>
+              <p className="vet-notes">{item.user_story}</p>
             </>
           )}
-          {item.impact_notes && (
+          {item.actors && (
             <>
-              <div className="vet-label">Impact</div>
-              <p className="vet-notes">{item.impact_notes}</p>
+              <div className="vet-label">Actors</div>
+              <p className="vet-notes">{item.actors}</p>
+            </>
+          )}
+          {item.pre_condition && (
+            <>
+              <div className="vet-label">Pre-condition</div>
+              <p className="vet-notes">{item.pre_condition}</p>
+            </>
+          )}
+          {item.impacted_areas && (
+            <>
+              <div className="vet-label">Impacted Areas</div>
+              <p className="vet-notes">{item.impacted_areas}</p>
+            </>
+          )}
+          {item.requirements && (
+            <>
+              <div className="vet-label">Requirements</div>
+              <p className="vet-notes">{item.requirements}</p>
+            </>
+          )}
+          {item.acceptance_criteria && (
+            <>
+              <div className="vet-label">Acceptance Criteria</div>
+              <p className="vet-notes">{item.acceptance_criteria}</p>
+            </>
+          )}
+          {item.exceptions && (
+            <>
+              <div className="vet-label">Exceptions</div>
+              <p className="vet-notes">{item.exceptions}</p>
             </>
           )}
         </div>

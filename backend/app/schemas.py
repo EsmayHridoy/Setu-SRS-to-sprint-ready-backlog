@@ -180,11 +180,31 @@ class BusinessItemOut(ORM):
     description: str
     location: str
     vetting_status: str
-    is_existing_business_change: bool | None = None
-    change_feasible: bool | None = None
+
+    is_requirement_clear: bool | None = None
+    is_feasible: bool | None = None
+    already_supported: bool | None = None
+
+    # BRAC IT's own Change Request / Story template vocabulary.
+    user_story: str
+    actors: str
+    pre_condition: str
+    impacted_areas: str
+    requirements: str
+    acceptance_criteria: str
+    exceptions: str
+
+    # Superseded fields, kept for backward compatibility.
+    current_business: str
     feasibility_notes: str
+    integration_approach: str | None = None
+    related_existing_feature: str
+    integration_notes: str
     impacts_other_features: bool | None = None
     impact_notes: str
+    is_existing_business_change: bool | None = None
+    change_feasible: bool | None = None
+
     verdict: str
     error_message: str
     vetted_at: datetime | None = None

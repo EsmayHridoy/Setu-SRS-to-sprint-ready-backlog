@@ -227,11 +227,16 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                     item.error_message = str(exc)
                 else:
                     item.vetting_status = "DONE"
-                    item.is_existing_business_change = result.is_existing_business_change
-                    item.change_feasible = result.change_feasible
-                    item.feasibility_notes = result.feasibility_notes
-                    item.impacts_other_features = result.impacts_other_features
-                    item.impact_notes = result.impact_notes
+                    item.is_requirement_clear = result.is_requirement_clear
+                    item.is_feasible = result.is_feasible
+                    item.already_supported = result.already_supported
+                    item.user_story = result.user_story
+                    item.actors = result.actors
+                    item.pre_condition = result.pre_condition
+                    item.impacted_areas = result.impacted_areas
+                    item.requirements = result.requirements
+                    item.acceptance_criteria = result.acceptance_criteria
+                    item.exceptions = result.exceptions
                     item.verdict = result.verdict
                 item.vetted_at = datetime.utcnow()
                 session.commit()

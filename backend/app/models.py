@@ -238,11 +238,37 @@ class BusinessItem(Base):
     location: Mapped[str] = mapped_column(String(200), default="")
 
     vetting_status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING | DONE | ERROR
-    is_existing_business_change: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    change_feasible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Whether the requirement itself is clear enough to vet, or vague/
+    # ambiguous enough that the client should be asked to clarify it first.
+    is_requirement_clear: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_feasible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    already_supported: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Response fields, in BRAC IT's own Change Request / Story template
+    # vocabulary -- verified and gap-filled against the live repository
+    # rather than invented from scratch.
+    user_story: Mapped[str] = mapped_column(Text, default="")
+    actors: Mapped[str] = mapped_column(Text, default="")
+    pre_condition: Mapped[str] = mapped_column(Text, default="")
+    impacted_areas: Mapped[str] = mapped_column(Text, default="")
+    requirements: Mapped[str] = mapped_column(Text, default="")
+    acceptance_criteria: Mapped[str] = mapped_column(Text, default="")
+    exceptions: Mapped[str] = mapped_column(Text, default="")
+
+    # Superseded by the template-shaped fields above. Kept (unpopulated by
+    # new vettings) so historical rows and anything still reading them
+    # directly are not broken.
+    current_business: Mapped[str] = mapped_column(Text, default="")
     feasibility_notes: Mapped[str] = mapped_column(Text, default="")
+    integration_approach: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    related_existing_feature: Mapped[str] = mapped_column(Text, default="")
+    integration_notes: Mapped[str] = mapped_column(Text, default="")
     impacts_other_features: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     impact_notes: Mapped[str] = mapped_column(Text, default="")
+    is_existing_business_change: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    change_feasible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     verdict: Mapped[str] = mapped_column(Text, default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     vetted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
