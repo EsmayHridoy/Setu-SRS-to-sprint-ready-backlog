@@ -278,7 +278,9 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">
-            <img src={setuLogo} alt="Setu" className="sidebar-logo" />
+            <div className="sidebar-logo-wrap">
+              <img src={setuLogo} alt="Setu" className="sidebar-logo" />
+            </div>
           </div>
 
           <button
@@ -419,7 +421,9 @@ export default function App() {
         ) : (
           <div className="welcome">
             <div className="welcome-inner">
-              <img src={setuLogo} alt="Setu" className="welcome-logo" />
+              <div className="welcome-logo-wrap">
+                <img src={setuLogo} alt="Setu" className="welcome-logo" />
+              </div>
               <h2>How can I help you today?</h2>
               <p className="welcome-sub">
                 {projectId
