@@ -88,12 +88,19 @@ button {
   --border-strong: #cfd6e0;
 }
 
+.login-logo-wrap {
+  background: #0c1828;
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
 .login-logo {
   width: 100%;
-  max-width: 300px;
+  max-width: 280px;
   height: auto;
   display: block;
-  margin: 0 auto 8px;
+  margin: 0 auto;
 }
 
 .login-sub {

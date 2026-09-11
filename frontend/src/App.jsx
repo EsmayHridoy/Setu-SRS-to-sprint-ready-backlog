@@ -242,7 +242,9 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <img src={setuLogo} alt="Setu" className="login-logo" />
+          <div className="login-logo-wrap">
+            <img src={setuLogo} alt="Setu" className="login-logo" />
+          </div>
           <p className="login-sub">Choose an account to start chatting</p>
           {error && <div className="alert error">{error}</div>}
           <ul className="account-list">
@@ -260,7 +262,6 @@ export default function App() {
               </li>
             ))}
           </ul>
-          <p className="api-base">{API_BASE}</p>
         </div>
       </div>
     );
