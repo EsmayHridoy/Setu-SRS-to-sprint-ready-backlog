@@ -1,0 +1,77 @@
+# =============================================================================
+# Setu — GitLab CI/CD (image build only)
+#
+# Tag setu-production-* (created from staging OR main):
+#   build backend + frontend images -> push to this project's GitLab registry
+#
+# No deploy step here on purpose -- this pipeline stops once the images are in
+# the registry. Wire up a separate deploy stage later once the hosting side
+# (Hostinger) is ready to pull them.
+#
+# CI/CD Variables (Settings -> CI/CD -> Variables), all optional:
+#   VITE_API_BASE_URL   the backend's public URL, baked into the frontend
+#                        build (Vite reads it at build time, not runtime).
+#                        Defaults to a localhost URL meant only for a local
+#                        docker-compose setup -- override once the real
+#                        backend URL is known.
+# =============================================================================
+
+stages:
+  - build
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
+  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
+  VITE_API_BASE_URL: "http://localhost:8001"
+
+.tag_from_staging_or_main:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^setu-production-/'
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  before_script:
+    - apk add --no-cache git
+    - docker info
+    # GitLab provides $CI_REGISTRY_USER / $CI_REGISTRY_PASSWORD automatically
+    # in every pipeline -- no manual credential setup needed for the push itself.
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      echo "Checking tag $CI_COMMIT_TAG was created from staging or main..."
+      git fetch --unshallow 2>/dev/null || true
+      git fetch origin staging main
+      if git merge-base --is-ancestor "$CI_COMMIT_SHA" "origin/staging"; then
+        echo "OK: $CI_COMMIT_SHA is on staging."
+      elif git merge-base --is-ancestor "$CI_COMMIT_SHA" "origin/main"; then
+        echo "OK: $CI_COMMIT_SHA is on main."
+      else
+        echo "ERROR: Tag must be created from staging or main."
+        exit 1
+      fi
+
+build-backend:
+  extends: .tag_from_staging_or_main
+  stage: build
+  script:
+    - docker build
+        -t "$BACKEND_IMAGE:$CI_COMMIT_TAG"
+        -t "$BACKEND_IMAGE:latest"
+        -f backend/Dockerfile
+        backend
+    - docker push "$BACKEND_IMAGE:$CI_COMMIT_TAG"
+    - docker push "$BACKEND_IMAGE:latest"
+
+build-frontend:
+  extends: .tag_from_staging_or_main
+  stage: build
+  script:
+    - docker build
+        --build-arg "VITE_API_BASE_URL=$VITE_API_BASE_URL"
+        -t "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+        -t "$FRONTEND_IMAGE:latest"
+        -f frontend/Dockerfile
+        frontend
+    - docker push "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+    - docker push "$FRONTEND_IMAGE:latest"
