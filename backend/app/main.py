@@ -75,6 +75,18 @@ def _check_database() -> None:
         )
         raise SystemExit(1)
 
+    item_columns = {c["name"] for c in inspect(engine).get_columns("business_items")}
+    if "similarity_percent" not in item_columns:
+        print(
+            "\nThe database schema is out of date: "
+            "business_items.similarity_percent is missing.\n\n"
+            "  Upgrade it in place (keeps your data) with:\n\n"
+            "    psql -h 127.0.0.1 -p 5432 -d setu "
+            "-f db/migrations/002_business_item_similarity.sql\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 
 # Checked at import so a misconfiguration exits cleanly, before uvicorn has
 # started serving. Raising SystemExit inside the async lifespan instead would

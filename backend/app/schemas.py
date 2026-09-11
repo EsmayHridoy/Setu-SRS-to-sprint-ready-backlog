@@ -188,6 +188,9 @@ class BusinessItemOut(ORM):
     verdict: str
     error_message: str
     vetted_at: datetime | None = None
+    similarity_percent: int | None = None
+    similar_feature: str = ""
+    similarity_notes: str = ""
 
 
 class BusinessPlanOut(ORM):

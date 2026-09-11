@@ -1402,6 +1402,112 @@ select:focus {
   color: var(--danger);
 }
 
+/* Similarity of a vetted business to the closest existing feature */
+.sim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.sim-unknown {
+  color: var(--text-faint);
+}
+
+.sim-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.sim-bar {
+  position: relative;
+  width: 110px;
+  max-width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.sim-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+}
+
+.sim-fill.low {
+  background: var(--text-faint);
+}
+
+.sim-fill.mid {
+  background: #d98e04;
+}
+
+.sim-fill.high {
+  background: #1c7a45;
+}
+
+.sim-pct {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-band {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.sim-feature {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.sim-notes {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.sim-tag {
+  display: inline-block;
+  min-width: 62px;
+  margin-right: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: center;
+}
+
+.sim-tag.matches {
+  background: #e3f4ea;
+  color: #1c7a45;
+}
+
+.sim-tag.differs {
+  background: #fdf3dc;
+  color: #9a6400;
+}
+
+.sim-tag.missing {
+  background: #fdecef;
+  color: var(--danger);
+}
+
 /* Scrollbars */
 .conv-scroll::-webkit-scrollbar,
 .thread::-webkit-scrollbar,

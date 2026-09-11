@@ -246,6 +246,12 @@ class BusinessItem(Base):
     verdict: Mapped[str] = mapped_column(Text, default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     vetted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # How much of the requirement the closest existing feature already does
+    # (0-100; None if the agent couldn't measure it), which feature that is,
+    # and the MATCHES / DIFFERS / MISSING list the number was taken from.
+    similarity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    similar_feature: Mapped[str] = mapped_column(Text, default="")
+    similarity_notes: Mapped[str] = mapped_column(Text, default="")
 
     plan = relationship("BusinessPlan", back_populates="items")
 

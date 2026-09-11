@@ -213,8 +213,17 @@ CREATE TABLE business_items (
     verdict                      TEXT         NOT NULL DEFAULT '',
     error_message                TEXT         NOT NULL DEFAULT '',
     vetted_at                    TIMESTAMP,
+    -- How much of the requirement the closest existing feature already
+    -- does (0-100), which feature that is, and the rule-by-rule MATCHES /
+    -- DIFFERS / MISSING list behind the number. NULL percent: the agent
+    -- could not read the code to measure it.
+    similarity_percent           INTEGER,
+    similar_feature              TEXT         NOT NULL DEFAULT '',
+    similarity_notes             TEXT         NOT NULL DEFAULT '',
     CONSTRAINT business_items_vetting_status_check
         CHECK (vetting_status IN ('PENDING', 'DONE', 'ERROR')),
+    CONSTRAINT business_items_similarity_percent_check
+        CHECK (similarity_percent BETWEEN 0 AND 100),
     CONSTRAINT uq_business_items_plan_seq UNIQUE (plan_id, seq_no)
 );
 

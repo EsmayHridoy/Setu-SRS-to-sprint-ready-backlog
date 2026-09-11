@@ -6,7 +6,9 @@ the document it came from. `vet_business` takes one of those and checks it
 against the live GitHub repo (through the same GITHUB_PAT-authenticated MCP
 connection app/github_agent.py uses) on the two criteria the review process
 cares about: is this a change to an existing business, and if so is it
-feasible; and does it impact other related features.
+feasible; and does it impact other related features. It also measures how
+similar the requirement is to the closest existing feature, as a percentage
+backed by a rule-by-rule MATCHES / DIFFERS / MISSING list.
 
 Both rely on the installed google-adk's documented support for combining
 `output_schema` with `tools` -- tools stay available during the reasoning
@@ -19,7 +21,7 @@ import json
 import logging
 
 from google.adk.agents import LlmAgent
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from . import github_mcp
 from .adk_runner import build_generate_config, build_model, run_single_turn
@@ -50,15 +52,50 @@ _VETTING_INSTRUCTION_TEMPLATE = (
     "code in the repository. {repo_hint} {tool_list_hint}\n\n"
     "{procedure}\n\n"
     "First understand the current business the relevant code implements "
-    "today. before anything else: read `.agent/context.yaml` then check file to answer. "
-    "Then answer two questions about the proposed requirement:\n\n"
+    "today. before anything else: read `.agent/context.yaml` then check desired files to answer. "
+    "Then answer two questions about the proposed requirement (stated the way a BA or client "
+    "would say them, not in technical terms) : \n\n"
     "1. Is this a change to an existing business rule/feature already "
-    "implemented in the repository? If yes, is it feasible to incorporate "
+    "implemented in the repository? Work this out carefully by measuring how "
+    "similar the requirement is to the closest existing feature (see "
+    "'Similarity' below). If yes, is it feasible to incorporate "
     "into the system as it exists today, and does it fit how the current "
     "business works (set `change_feasible`; leave it null if this isn't an "
     "existing-business change)? Put the reasoning in `feasibility_notes`.\n"
     "2. Does this business impact other features related to it elsewhere in "
     "the codebase? Name where the impact lands in `impact_notes`.\n\n"
+    "Similarity -- how much of the requested behaviour the closest existing "
+    "feature already does. Measure it, don't estimate it from names:\n"
+    "- Set `similar_feature` to that closest feature: its name as the code "
+    "or `.agent/context.yaml` calls it, then its main files, e.g. `Leave "
+    "approval (app/leave/approval.py, app/leave/rules.py)`. Leave it empty "
+    "if nothing related exists.\n"
+    "- Break the requirement into its individual rules and behaviours. "
+    "Check each one against the code you actually read and mark it "
+    "MATCHES (the code already does it), DIFFERS (the code does something "
+    "related but not this) or MISSING (nothing does it). List every one in "
+    "`similarity_notes`, one per line, with the file or function you checked, "
+    "e.g. `MATCHES: manager approves the request -- approve() in "
+    "app/leave/approval.py`.\n"
+    "- Set `similarity_percent` (a whole number, 0-100) from that list -- "
+    "the share of the requirement the existing code already satisfies, "
+    "counting a DIFFERS as partial. Use this scale so the number means the "
+    "same thing every time:\n"
+    "  0: you searched and nothing related exists; this is wholly new.\n"
+    "  1-25: the area exists (same module or entities), but none of the "
+    "requested behaviour.\n"
+    "  26-50: some of the behaviour exists; most is missing or works "
+    "differently.\n"
+    "  51-75: most of it exists; some rules are missing or differ.\n"
+    "  76-99: nearly all of it exists; only a small detail differs (a limit, "
+    "a threshold, a label).\n"
+    "  100: already implemented exactly as asked; nothing to change -- say "
+    "so in `verdict`.\n"
+    "- If you could not find or read the relevant code, set "
+    "`similarity_percent` to null and say what you could not check in "
+    "`similarity_notes`. Never guess a number you did not measure.\n"
+    "- Keep it consistent with question 1: at 0 this cannot be a change to "
+    "an existing business.\n\n"
     "Ground every claim in what you actually found through the tools -- name "
     "the specific file, function or issue/PR you looked at in your notes. "
     "Never claim to have made a change; you are only investigating. "
@@ -82,7 +119,27 @@ class BusinessVetting(BaseModel):
     feasibility_notes: str
     impacts_other_features: bool
     impact_notes: str
+    # How much of the requirement the closest existing feature already does;
+    # null when the agent couldn't read the code to measure it. Required (no
+    # default) so the model must always answer, if only with an explicit null.
+    similarity_percent: int | None = Field(ge=0, le=100)
+    similar_feature: str
+    similarity_notes: str
     verdict: str
+
+    @field_validator("similarity_percent", mode="before")
+    @classmethod
+    def _clamp_percent(cls, value):
+        """Accept 72, 72.4 or "72%", and pull an out-of-range number back to
+        0-100 rather than failing the whole item over it."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, str):
+            value = value.strip().rstrip("%").strip()
+        try:
+            return max(0, min(100, round(float(value))))
+        except (TypeError, ValueError):
+            return None
 
 
 def _parse_json(final_text: str, label: str):

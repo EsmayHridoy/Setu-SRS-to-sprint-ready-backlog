@@ -45,6 +45,13 @@ def _yes_no(value: bool | None) -> str:
     return "unknown" if value is None else ("yes" if value else "no")
 
 
+def _similarity(percent: int | None, feature: str) -> str:
+    if percent is None:
+        return "not measured"
+    to = f" to {_clip(feature, MAX_NOTE_CHARS)}" if feature else ""
+    return f"{percent}%{to}"
+
+
 def render_plan(plan: BusinessPlan) -> str:
     """The plan as plain text: every item, and its vetting result if it has one."""
     status = _PLAN_STATUS.get(plan.status, plan.status.lower())
@@ -56,6 +63,8 @@ def render_plan(plan: BusinessPlan) -> str:
         lines.append(f"{item.seq_no}. {item.description}{where}")
         if item.vetting_status == "DONE":
             lines.append(f"   Verdict: {_clip(item.verdict, MAX_NOTE_CHARS)}")
+            lines.append(f"   Similarity to existing code: "
+                         f"{_similarity(item.similarity_percent, item.similar_feature)}")
             lines.append(
                 f"   Changes an existing business: "
                 f"{_yes_no(item.is_existing_business_change)}; feasible: "

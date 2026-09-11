@@ -232,6 +232,9 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                     item.feasibility_notes = result.feasibility_notes
                     item.impacts_other_features = result.impacts_other_features
                     item.impact_notes = result.impact_notes
+                    item.similarity_percent = result.similarity_percent
+                    item.similar_feature = result.similar_feature
+                    item.similarity_notes = result.similarity_notes
                     item.verdict = result.verdict
                 item.vetted_at = datetime.utcnow()
                 session.commit()

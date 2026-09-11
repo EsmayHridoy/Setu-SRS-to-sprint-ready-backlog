@@ -756,6 +756,7 @@ function VettedItem({ item, running }) {
       {item.vetting_status === 'DONE' && (
         <div className="vet-body">
           <p className="vet-verdict">{item.verdict}</p>
+          <Similarity percent={item.similarity_percent} feature={item.similar_feature} />
           <div className="vet-flags">
             <span className="pill">Changes existing business: {yesNo(item.is_existing_business_change)}</span>
             {item.is_existing_business_change && (
@@ -775,10 +776,79 @@ function VettedItem({ item, running }) {
               <p className="vet-notes">{item.impact_notes}</p>
             </>
           )}
+          {item.similarity_notes && (
+            <>
+              <div className="vet-label">Similarity breakdown</div>
+              <SimilarityNotes notes={item.similarity_notes} />
+            </>
+          )}
         </div>
       )}
       {item.vetting_status === 'ERROR' && <p className="vet-error">{item.error_message}</p>}
     </li>
+  );
+}
+
+// The same bands the vetting agent is told to score against
+// (_VETTING_INSTRUCTION_TEMPLATE in backend/app/business_agent.py).
+function similarityBand(p) {
+  if (p === 0) return 'New';
+  if (p <= 25) return 'Area exists';
+  if (p <= 50) return 'Partly exists';
+  if (p <= 75) return 'Mostly exists';
+  if (p < 100) return 'Nearly all exists';
+  return 'Already implemented';
+}
+
+// How much of the requirement the closest existing feature already does.
+// null means the agent couldn't read the code to measure it.
+function Similarity({ percent, feature }) {
+  if (percent == null) {
+    return <div className="sim sim-unknown">Similarity to existing code: not measured</div>;
+  }
+  const level = percent <= 25 ? 'low' : percent <= 75 ? 'mid' : 'high';
+  return (
+    <div className="sim">
+      <span className="sim-label">Similarity</span>
+      <span
+        className="sim-bar"
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-label="Similarity to existing code"
+      >
+        <span className={`sim-fill ${level}`} style={{ width: `${percent}%` }} />
+      </span>
+      <span className="sim-pct">{percent}%</span>
+      <span className="sim-band">{similarityBand(percent)}</span>
+      {feature && <span className="sim-feature">to {feature}</span>}
+    </div>
+  );
+}
+
+// One line per rule, e.g. "MATCHES: manager approves -- approve() in …";
+// the leading verdict word gets a colored tag, other lines render as-is.
+function SimilarityNotes({ notes }) {
+  const lines = notes.split('\n').map((l) => l.trim()).filter(Boolean);
+  return (
+    <ul className="sim-notes">
+      {lines.map((line, i) => {
+        const m = line.match(/^[-*•\s]*(MATCHES|DIFFERS|MISSING)\s*[:\-–—]\s*(.*)$/i);
+        return (
+          <li key={i}>
+            {m ? (
+              <>
+                <span className={`sim-tag ${m[1].toLowerCase()}`}>{m[1].toUpperCase()}</span>
+                {m[2]}
+              </>
+            ) : (
+              line
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
