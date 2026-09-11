@@ -4,7 +4,6 @@ import setuLogo from './assets/setu_logo.svg';
 
 export default function App() {
   const [session, setSession] = useState(null);
-  const [authChecked, setAuthChecked] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -29,7 +28,6 @@ export default function App() {
   // On mount, try to restore session from a stored token.
   useEffect(() => {
     if (!getToken()) {
-      setAuthChecked(true);
       return;
     }
     api.getSession()
@@ -39,8 +37,7 @@ export default function App() {
       })
       .catch(() => {
         setToken('');
-      })
-      .finally(() => setAuthChecked(false));
+      });
   }, []);
 
   useEffect(() => {
@@ -236,7 +233,11 @@ export default function App() {
             if (s.projects?.length) setProjectId(s.projects[0].id);
           } catch (e) {
             setToken('');
-            setError(e.message.replace(/^4\d\d: /, ''));
+            if (e.message.startsWith('429')) {
+              setError('Too many login attempts. Please wait 15 minutes and try again.');
+            } else {
+              setError(e.message.replace(/^\d+: /, ''));
+            }
           } finally {
             setLoading(false);
           }
@@ -358,7 +359,7 @@ export default function App() {
 
           {showChangePwd && (
             <Modal title="Change password" onClose={() => setShowChangePwd(false)}>
-              <ChangePasswordModal onClose={() => setShowChangePwd(false)} onError={setError} />
+              <ChangePasswordModal onClose={() => setShowChangePwd(false)} />
             </Modal>
           )}
         </div>
@@ -945,7 +946,7 @@ function Composer({
   );
 }
 
-function ChangePasswordModal({ onClose, onError }) {
+function ChangePasswordModal({ onClose }) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -996,7 +997,7 @@ function ChangePasswordModal({ onClose, onError }) {
   );
 }
 
-function ResetPasswordModal({ user, onClose, onError }) {
+function ResetPasswordModal({ user, onClose }) {
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [err, setErr] = useState('');
@@ -1216,7 +1217,6 @@ function AdminView({ loading, onRefresh, onError, roles, projects, users, audit 
           <ResetPasswordModal
             user={resetTarget}
             onClose={() => setResetTarget(null)}
-            onError={onError}
           />
         </Modal>
       )}

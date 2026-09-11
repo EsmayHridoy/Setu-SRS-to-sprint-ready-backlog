@@ -39,7 +39,7 @@ async function request(path, { method = 'GET', body } = {}) {
   }
 
   if (!res.ok) {
-    const detail = data?.detail || data?.message || text || res.statusText;
+    const detail = data?.detail || data?.error || data?.message || text || res.statusText;
     throw new Error(`${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
   }
 

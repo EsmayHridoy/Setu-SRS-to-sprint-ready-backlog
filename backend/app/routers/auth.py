@@ -5,10 +5,11 @@ There is no self-registration — only admins can create accounts.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..limiter import limiter
 from ..models import User
 from ..schemas import ChangePasswordIn, LoginIn, SessionOut, TokenOut, UserOut
 from ..security import (
@@ -21,7 +22,8 @@ router = APIRouter(tags=["session"])
 
 
 @router.post("/api/auth/login", response_model=TokenOut)
-def login(payload: LoginIn, db: Session = Depends(get_db)):
+@limiter.limit("3/15minutes")
+def login(request: Request, payload: LoginIn, db: Session = Depends(get_db)):
     """Issue a JWT for valid credentials. No registration — admin creates accounts."""
     user = db.query(User).filter(User.email == str(payload.email)).first()
     if (
