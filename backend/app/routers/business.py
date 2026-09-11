@@ -183,8 +183,9 @@ def discard_plan(plan_id: str, user: User = Depends(current_user),
 def vet_stream(plan_id: str, user: User = Depends(current_user),
                db: Session = Depends(get_db)):
     """Vet every business one at a time, streaming each verdict as it's
-    produced. Already-vetted items (from an earlier, interrupted run) are
-    replayed from the DB instead of being vetted again.
+    produced, with `item_status` progress lines while each one is vetted.
+    Already-vetted items (from an earlier, interrupted run) are replayed from
+    the DB instead of being vetted again.
     """
     plan = _accessible_plan(db, plan_id, user)
     if plan.status not in ("CONFIRMED", "DONE"):
@@ -219,9 +220,17 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                     "description": item.description,
                 })
                 try:
-                    result = await business_agent.vet_business(
+                    async for kind, value in business_agent.vet_business_stream(
                         item.description, user_id=user_id, history=history,
-                    )
+                    ):
+                        if kind == business_agent.RESULT:
+                            result = value
+                        else:
+                            # What the agent is doing on this item right now;
+                            # shown on its row until the result replaces it.
+                            yield sse_event("item_status", {
+                                "item_id": item.id, "text": value,
+                            })
                 except Exception as exc:  # noqa: BLE001 - one bad item shouldn't stop the rest
                     item.vetting_status = "ERROR"
                     item.error_message = str(exc)

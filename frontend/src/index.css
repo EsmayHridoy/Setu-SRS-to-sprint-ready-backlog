@@ -739,6 +739,83 @@ select:focus {
   }
 }
 
+/* Agent progress lines: muted, shown while the agent works, faded out once
+   the answer starts. Never part of the saved message. */
+.agent-steps {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 8em;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.agent-steps li {
+  position: relative;
+  padding-left: 14px;
+  overflow-wrap: anywhere;
+}
+
+.agent-steps li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.agent-steps li.current {
+  color: var(--text-muted);
+  animation: step-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-steps li.current::before {
+  background: var(--accent);
+}
+
+.agent-steps.leaving {
+  animation: steps-out 300ms ease forwards;
+}
+
+.vet-step {
+  margin: 6px 0 0 32px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  animation: step-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes step-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes steps-out {
+  to {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-steps li.current,
+  .vet-step {
+    animation: none;
+  }
+}
+
 /* ---------- Composer ---------- */
 .composer-wrap {
   padding: 12px 24px 20px;

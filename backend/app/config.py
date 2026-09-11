@@ -108,6 +108,14 @@ class Settings:
         # start -- this feature is opt-in, unlike DATABASE_URL above.
         self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        # How hard the chat and vetting agents think, which is also where the
+        # progress lines the chat shows while they work come from: the model
+        # only returns thought summaries at "medium" or above (checked on
+        # gemini-3.5-flash-lite -- its default and "low" return none). Higher
+        # is slower and uses more tokens per turn. Blank keeps the model's own
+        # default, and the chat then shows the agent's tool steps only.
+        self.gemini_thinking_level = os.getenv(
+            "GEMINI_THINKING_LEVEL", "medium").strip().lower()
         # A fine-grained PAT scoped to a single repo. That scope, set when the
         # token is created on GitHub, is what limits the agent -- not this app.
         self.github_pat = os.getenv("GITHUB_PAT", "")
