@@ -1,85 +1,68 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
-  <title id="title">SETU — SRS to Sprint Ready Backlog</title>
-  <desc id="desc">Modern blue and cyan SETU logo with a document-to-backlog flow icon.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 240" width="100%" height="100%">
   <defs>
-    <linearGradient id="setuGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#19D3F3"/>
-      <stop offset="55%" stop-color="#247BFF"/>
-      <stop offset="100%" stop-color="#5148E8"/>
+    <linearGradient id="bracPink" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF2A9D"/>
+      <stop offset="50%" stop-color="#EC008C"/>
+      <stop offset="100%" stop-color="#A80062"/>
     </linearGradient>
-    <linearGradient id="accentGradient" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#19D3F3"/>
-      <stop offset="100%" stop-color="#247BFF"/>
-    </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="7" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
 
-  <!-- Transparent background -->
+  <!-- LOGO MARK: Suspension Bridge -->
+  <g transform="translate(100, 25)">
+    <!-- Water / Foundation Base Line -->
+    <rect x="20" y="95" width="260" height="3" rx="1.5" fill="#F3D0D7" />
 
-  <!-- Icon -->
-  <g transform="translate(55 55)">
-    <!-- flowing S / transformation path -->
-    <path d="M150 35
-             C92 35 45 70 45 119
-             C45 158 73 180 119 190
-             L190 205
-             C226 213 244 231 244 260
-             C244 307 200 335 142 335
-             C91 335 52 317 25 288"
-          fill="none" stroke="url(#setuGradient)" stroke-width="34"
-          stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+    <!-- Left Pier/Tower -->
+    <rect x="85" y="30" width="10" height="65" fill="#EC008C" rx="1" />
+    <!-- Right Pier/Tower -->
+    <rect x="205" y="30" width="10" height="65" fill="#EC008C" rx="1" />
 
-    <!-- top document -->
-    <rect x="92" y="57" width="105" height="100" rx="12"
-          fill="#16233B" stroke="#E8EDF5" stroke-width="7"/>
-    <path d="M116 87h58M116 110h58M116 133h42"
-          stroke="#E8EDF5" stroke-width="8" stroke-linecap="round"/>
+    <!-- Main Suspension Cables (Top Swoop) -->
+    <path d="M 20,65 Q 85,30 85,30 Q 145,68 205,30 Q 205,30 280,65" 
+          fill="none" stroke="#EC008C" stroke-width="4" stroke-linecap="round" />
 
-    <!-- backlog card -->
-    <rect x="111" y="202" width="112" height="103" rx="12"
-          fill="#16233B" stroke="#E8EDF5" stroke-width="7"/>
-    <circle cx="133" cy="228" r="7" fill="#19D3F3"/>
-    <circle cx="133" cy="253" r="7" fill="#247BFF"/>
-    <circle cx="133" cy="278" r="7" fill="#5148E8"/>
-    <path d="M151 228h47M151 253h47M151 278h47"
-          stroke="#E8EDF5" stroke-width="7" stroke-linecap="round"/>
+    <!-- Vertical Suspension Hangers (Cables) -->
+    <!-- Left span cables -->
+    <line x1="45" y1="57" x2="45" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="65" y1="46" x2="65" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    
+    <!-- Center main span cables -->
+    <line x1="110" y1="44" x2="110" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="130" y1="55" x2="130" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="150" y1="58" x2="150" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="170" y1="55" x2="170" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="190" y1="44" x2="190" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
 
-    <!-- directional arrow -->
-    <path d="M183 153h58l-20-18m20 18-20 18"
-          fill="none" stroke="#19D3F3" stroke-width="10"
-          stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Right span cables -->
+    <line x1="235" y1="46" x2="235" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+    <line x1="255" y1="57" x2="255" y2="75" stroke="#EC008C" stroke-width="1.5" opacity="0.6" />
+
+    <!-- Bridge Deck / Roadway Curve -->
+    <path d="M 20,78 Q 145,72 280,78" fill="none" stroke="url(#bracPink)" stroke-width="6" stroke-linecap="round" />
   </g>
 
-  <!-- Wordmark -->
-  <g transform="translate(365 82)">
-    <text x="0" y="165"
-          font-family="Arial, Helvetica, sans-serif"
-          font-size="174" font-weight="800" letter-spacing="8"
-          fill="#EC008C">SETU</text>
+  <!-- TYPOGRAPHY -->
+  <text 
+    x="250" 
+    y="165" 
+    font-family="System-UI, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
+    font-size="52" 
+    font-weight="800" 
+    fill="#EC008C" 
+    text-anchor="middle"
+    letter-spacing="-0.5">
+    Setu
+  </text>
 
-    <!-- accent underline -->
-    <rect x="8" y="190" width="505" height="8" rx="4"
-          fill="url(#accentGradient)"/>
-
-    <!-- tagline -->
-    <text x="8" y="250"
-          font-family="Arial, Helvetica, sans-serif"
-          font-size="34" font-weight="500" letter-spacing="1"
-          fill="#16233B">SRS</text>
-    <text x="92" y="250"
-          font-family="Arial, Helvetica, sans-serif"
-          font-size="34" font-weight="500" letter-spacing="1"
-          fill="#19D3F3">to</text>
-    <text x="143" y="250"
-          font-family="Arial, Helvetica, sans-serif"
-          font-size="34" font-weight="500" letter-spacing="1"
-          fill="#16233B"> sprint-ready backlog</text>
-  </g>
+  <text 
+    x="250" 
+    y="198" 
+    font-family="System-UI, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
+    font-size="15" 
+    font-weight="600" 
+    fill="#8A0051" 
+    text-anchor="middle"
+    letter-spacing="0.3">
+    From SRS to Sprint-Ready Backlog
+  </text>
 </svg>

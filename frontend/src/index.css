@@ -64,7 +64,7 @@ button {
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(14, 24, 48, 0.62);
+  background: rgba(80, 0, 40, 0.45);
 }
 
 .login-card {
@@ -73,20 +73,21 @@ button {
   width: 100%;
   max-width: 420px;
   text-align: center;
-  background: rgba(255, 255, 255, 0.97);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: var(--radius-lg);
   padding: 40px 36px 36px;
-  box-shadow: 0 16px 56px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 64px rgba(180, 0, 90, 0.25), 0 4px 16px rgba(0,0,0,0.15);
+  border-top: 3px solid var(--accent);
 }
 
 .login-logo-wrap {
-  padding: 12px 8px;
-  margin-bottom: 20px;
+  padding: 4px 8px;
+  margin-bottom: 16px;
 }
 
 .login-logo {
   width: 100%;
-  max-width: 280px;
+  max-width: 260px;
   height: auto;
   display: block;
   margin: 0 auto;
@@ -95,6 +96,7 @@ button {
 .login-sub {
   margin: 0 0 24px;
   color: var(--text-muted);
+  font-size: 13px;
 }
 
 .login-form {
@@ -566,7 +568,7 @@ select:focus {
 
 .welcome-logo {
   width: 100%;
-  max-width: 320px;
+  max-width: 380px;
   height: auto;
   display: block;
   margin: 0 auto;
@@ -614,7 +616,7 @@ select:focus {
   height: 28px;
   flex-shrink: 0;
   border-radius: 7px;
-  background: #0c1828;
+  background: var(--accent);
   display: grid;
   place-items: center;
   margin-top: 2px;
