@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, API_BASE } from './api';
+import { api } from './api';
+import setuLogo from './assets/setu_logo.svg';
 
 const STORAGE_KEY = 'setu_user_id';
 
@@ -25,6 +26,7 @@ export default function App() {
   const [adminAudit, setAdminAudit] = useState([]);
 
   const threadEndRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     api
@@ -122,29 +124,23 @@ export default function App() {
     setAttachment({ file, filename: file.name, size: file.size });
   }
 
-  async function sendMessage(e) {
-    e.preventDefault();
-    if (!activeConversation || streaming) return;
-    if (!messageText.trim() && !attachment) return;
-    const typed = messageText.trim();
-    const att = attachment;
-    const convId = activeConversation.id;
+  function stopStreaming() {
+    abortRef.current?.abort();
+  }
+
+  async function doStream(convId, text, att) {
     const tempUserId = `tmp-u-${Date.now()}`;
     const tempReplyId = `tmp-a-${Date.now()}`;
-
-    // With an attachment the user turn is just a note; the extracted text
-    // arrives as the streamed reply. Without one it's the typed question.
     const userContent = att
-      ? `[Uploaded document: ${att.filename}]${typed ? `\n\n${typed}` : ''}`
-      : typed;
+      ? `[Uploaded document: ${att.filename}]${text ? `\n\n${text}` : ''}`
+      : text;
 
     setError('');
-    setMessageText('');
-    setAttachment(null);
     setStreaming(true);
 
-    // Optimistically show the user turn and an empty assistant bubble that the
-    // stream fills in token by token.
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     setActiveConversation((prev) => ({
       ...prev,
       messages: [
@@ -172,19 +168,38 @@ export default function App() {
     };
 
     try {
-      if (att) await api.streamUpload(userId, convId, att.file, typed, handlers);
-      else await api.streamMessage(userId, convId, typed, handlers);
+      if (att) await api.streamUpload(userId, convId, att.file, text, handlers, ctrl.signal);
+      else await api.streamMessage(userId, convId, text, handlers, ctrl.signal);
       await loadConversations();
     } catch (err) {
-      setError(err.message);
-      // Drop the empty assistant shell so a failed turn leaves no ghost bubble.
-      setActiveConversation((prev) => {
-        if (!prev || prev.id !== convId) return prev;
-        return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
-      });
+      if (ctrl.signal.aborted) {
+        patch(tempReplyId, (m) => ({
+          ...m,
+          content: m.content || 'Response was stopped before it could complete.',
+          streaming: false,
+        }));
+      } else {
+        setError(err.message);
+        setActiveConversation((prev) => {
+          if (!prev || prev.id !== convId) return prev;
+          return { ...prev, messages: prev.messages.filter((m) => m.id !== tempReplyId) };
+        });
+      }
     } finally {
+      abortRef.current = null;
       setStreaming(false);
     }
+  }
+
+  async function sendMessage(e) {
+    e.preventDefault();
+    if (!activeConversation || streaming) return;
+    const typed = messageText.trim();
+    const att = attachment;
+    if (!typed && !att) return;
+    setMessageText('');
+    setAttachment(null);
+    await doStream(activeConversation.id, typed, att);
   }
 
   async function loadAdmin() {
@@ -230,9 +245,9 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <div className="brand-mark">S</div>
-          <h1>Setu</h1>
-          <p className="brand-tag login-tag">A brac IT platform</p>
+          <div className="login-logo-wrap">
+            <img src={setuLogo} alt="Setu" className="login-logo" />
+          </div>
           <p className="login-sub">Choose an account to start chatting</p>
           {error && <div className="alert error">{error}</div>}
           <ul className="account-list">
@@ -250,7 +265,6 @@ export default function App() {
               </li>
             ))}
           </ul>
-          <p className="api-base">{API_BASE}</p>
         </div>
       </div>
     );
@@ -264,11 +278,9 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-top">
           <div className="brand">
-            <span className="brand-mark small">S</span>
-            <span className="brand-wordmark">
-              <span className="brand-name">Setu</span>
-              <span className="brand-tag">brac IT</span>
-            </span>
+            <div className="sidebar-logo-wrap">
+              <img src={setuLogo} alt="Setu" className="sidebar-logo" />
+            </div>
           </div>
 
           <button
@@ -399,6 +411,8 @@ export default function App() {
               onSubmit={sendMessage}
               onKeyDown={onComposerKeyDown}
               disabled={streaming}
+              streaming={streaming}
+              onStop={stopStreaming}
               attachment={attachment}
               onAttach={attachFile}
               onRemoveAttach={() => setAttachment(null)}
@@ -407,7 +421,9 @@ export default function App() {
         ) : (
           <div className="welcome">
             <div className="welcome-inner">
-              <div className="brand-mark">S</div>
+              <div className="welcome-logo-wrap">
+                <img src={setuLogo} alt="Setu" className="welcome-logo" />
+              </div>
               <h2>How can I help you today?</h2>
               <p className="welcome-sub">
                 {projectId
@@ -419,21 +435,30 @@ export default function App() {
                 onChange={setMessageText}
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!projectId) {
-                    setError('Select a project first');
-                    return;
+                  if (!projectId) { setError('Select a project first'); return; }
+                  const text = messageText.trim();
+                  const att = attachment;
+                  if (!text && !att) return;
+                  setMessageText('');
+                  setAttachment(null);
+                  setError('');
+                  try {
+                    const conv = await api.createConversation(userId, projectId);
+                    await loadConversations();
+                    const detail = await api.getConversation(userId, conv.id);
+                    setActiveConversation(detail);
+                    await doStream(conv.id, text, att);
+                  } catch (ex) {
+                    setError(ex.message);
                   }
-                  const text = messageText;
-                  await createConversation();
-                  setMessageText(text);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (projectId) createConversation();
+                    e.target.closest('form')?.requestSubmit();
                   }
                 }}
-                disabled={!projectId || loading}
+                disabled={!projectId || loading || streaming}
                 placeholder={projectId ? 'Message Setu…' : 'Select a project first'}
                 centered
                 attachment={attachment}
@@ -466,7 +491,11 @@ function Message({ m }) {
   const parsed = isUser ? parseUserContent(m.content) : null;
   return (
     <div className={`msg ${isUser ? 'user' : 'assistant'}`}>
-      {!isUser && <div className="msg-avatar">S</div>}
+      {!isUser && (
+        <div className="msg-avatar">
+          <img src="/favicon.svg" alt="Setu" className="msg-avatar-icon" />
+        </div>
+      )}
       <div className="msg-body">
         {isUser ? (
           <div className="bubble">
@@ -528,13 +557,15 @@ function Composer({
   attachment,
   onAttach,
   onRemoveAttach,
+  streaming,
+  onStop,
 }) {
   const fileRef = useRef(null);
   const canSend = (value.trim() || attachment) && !disabled;
 
   function pickFile(e) {
     const file = e.target.files?.[0];
-    e.target.value = ''; // allow re-selecting the same file
+    e.target.value = '';
     if (file) onAttach(file);
   }
 
@@ -576,9 +607,15 @@ function Composer({
           onKeyDown={onKeyDown}
           placeholder={placeholder || 'Message Setu…'}
         />
-        <button type="submit" className="send-btn" disabled={!canSend} title="Send">
-          <ArrowUpIcon />
-        </button>
+        {streaming && onStop ? (
+          <button type="button" className="stop-btn" onClick={onStop} title="Stop generating">
+            <StopIcon />
+          </button>
+        ) : (
+          <button type="submit" className="send-btn" disabled={!canSend} title="Send">
+            <ArrowUpIcon />
+          </button>
+        )}
       </form>
       <p className="composer-hint">Attach a PDF/DOCX · Enter to send · Shift+Enter for a new line</p>
     </div>
@@ -1019,6 +1056,13 @@ function ArrowUpIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+function StopIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
     </svg>
   );
 }
