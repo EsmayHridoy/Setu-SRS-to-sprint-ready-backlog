@@ -4,6 +4,14 @@
 # Tag setu-production-* (created from staging OR main):
 #   build backend + frontend images -> push to this project's GitLab registry
 #
+# Builds with Kaniko rather than docker-in-docker: this runner's dind service
+# never came up cleanly (consistent "mount: permission denied" / "AppArmor
+# detection and --privileged mode might break" on every attempt, regardless
+# of TLS/network settings) -- the signature of a runner not configured for
+# privileged containers. Kaniko builds a Dockerfile and pushes the result
+# without ever needing a Docker daemon or privileged mode, which is why
+# GitLab's own docs recommend it for exactly this situation.
+#
 # No deploy step here on purpose -- this pipeline stops once the images are in
 # the registry. Wire up a separate deploy stage later once the hosting side
 # (Hostinger) is ready to pull them.
@@ -17,40 +25,25 @@
 # =============================================================================
 
 stages:
+  - validate
   - build
 
 variables:
-  # Deliberately no TLS between the docker CLI and the dind service: setting
-  # DOCKER_TLS_CERTDIR="/certs" makes dind listen on the encrypted port 2376
-  # only, but without also pointing DOCKER_HOST at tcp://docker:2376 the CLI
-  # keeps trying the default plain port 2375 and fails with "Cannot connect
-  # to the Docker daemon at tcp://docker:2375" -- dind is actually up, just
-  # on a port nothing is asking for. Leaving this empty keeps dind on plain
-  # 2375, matching the CLI's own default; fine for this internal CI network.
-  DOCKER_TLS_CERTDIR: ""
-  # Makes this runner create a dedicated, DNS-resolvable network per job so
-  # the dind service's `docker` alias actually resolves. Without it, some
-  # runner configs fail service-hostname lookups by falling through to an
-  # external resolver ("lookup docker on 8.8.8.8:53: no such host") instead
-  # of the job's own embedded DNS.
-  FF_NETWORK_PER_BUILD: "true"
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   VITE_API_BASE_URL: "http://localhost:8001"
 
-.tag_from_staging_or_main:
+.tag_only:
   rules:
     - if: '$CI_COMMIT_TAG =~ /^setu-production-/'
-  image: docker:27
-  services:
-    - name: docker:27-dind
-      alias: docker
-  before_script:
-    - apk add --no-cache git
-    - docker info
-    # GitLab provides $CI_REGISTRY_USER / $CI_REGISTRY_PASSWORD automatically
-    # in every pipeline -- no manual credential setup needed for the push itself.
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+# Kaniko's image carries no git, so the tag-origin check runs here, in its
+# own lightweight job, before either build starts.
+check-tag-origin:
+  extends: .tag_only
+  stage: validate
+  image: alpine/git:latest
+  script:
     - |
       echo "Checking tag $CI_COMMIT_TAG was created from staging or main..."
       git fetch --unshallow 2>/dev/null || true
@@ -64,27 +57,41 @@ variables:
         exit 1
       fi
 
-build-backend:
-  extends: .tag_from_staging_or_main
+# `entrypoint: [""]` is required -- the kaniko image's own default entrypoint
+# IS the executor, which would run immediately instead of waiting for the
+# `script:` below. The `:debug` tag (not the plain kaniko image) is used
+# specifically because it ships a shell; the script here needs one and the
+# non-debug image has none at all.
+.kaniko_build:
+  extends: .tag_only
   stage: build
+  needs: ["check-tag-origin"]
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    # Kaniko doesn't understand `docker login` -- it reads registry auth
+    # straight out of this file instead, in plain Docker config.json shape.
+    - mkdir -p /kaniko/.docker
+    - |
+      AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+      echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$AUTH\"}}}" > /kaniko/.docker/config.json
+
+build-backend:
+  extends: .kaniko_build
   script:
-    - docker build
-        -t "$BACKEND_IMAGE:$CI_COMMIT_TAG"
-        -t "$BACKEND_IMAGE:latest"
-        -f backend/Dockerfile
-        backend
-    - docker push "$BACKEND_IMAGE:$CI_COMMIT_TAG"
-    - docker push "$BACKEND_IMAGE:latest"
+    - /kaniko/executor
+        --context "$CI_PROJECT_DIR/backend"
+        --dockerfile "$CI_PROJECT_DIR/backend/Dockerfile"
+        --destination "$BACKEND_IMAGE:$CI_COMMIT_TAG"
+        --destination "$BACKEND_IMAGE:latest"
 
 build-frontend:
-  extends: .tag_from_staging_or_main
-  stage: build
+  extends: .kaniko_build
   script:
-    - docker build
+    - /kaniko/executor
+        --context "$CI_PROJECT_DIR/frontend"
+        --dockerfile "$CI_PROJECT_DIR/frontend/Dockerfile"
+        --destination "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+        --destination "$FRONTEND_IMAGE:latest"
         --build-arg "VITE_API_BASE_URL=$VITE_API_BASE_URL"
-        -t "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
-        -t "$FRONTEND_IMAGE:latest"
-        -f frontend/Dockerfile
-        frontend
-    - docker push "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
-    - docker push "$FRONTEND_IMAGE:latest"
