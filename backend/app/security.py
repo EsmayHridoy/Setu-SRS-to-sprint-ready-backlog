@@ -1,33 +1,84 @@
 """Identity and access control.
 
-Authentication is a placeholder: the client sends an `X-User-Id` header picked
-from the sign-in list. When SSO arrives, only `current_user` changes — every
-permission check below reads from the database and stays exactly as it is.
+Authentication uses JWT Bearer tokens. The token is issued by POST /api/auth/login
+and must be included in every request as `Authorization: Bearer <token>`.
 
 Access to a project is never taken from the client. It is always recomputed
-here as the union of the projects granted to the caller's roles. A user may
-hold several roles; they see every project any of those roles grants.
+here as the union of the projects granted to the caller's roles.
 """
 from __future__ import annotations
 
-from fastapi import Depends, Header, HTTPException, status
+from datetime import datetime, timedelta
+
+import bcrypt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .db import get_db
 from .models import Project, Role, User, role_projects, user_roles
 
+settings = get_settings()
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+# --- password helpers ---------------------------------------------------------
+
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt(12)).decode()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+# --- JWT helpers --------------------------------------------------------------
+
+def create_access_token(user_id: str) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+    return jwt.encode(
+        {"sub": user_id, "exp": expire},
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+
+# --- FastAPI dependencies -----------------------------------------------------
 
 def current_user(
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
-    if not x_user_id:
+    if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Sign in to continue.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    user = db.get(User, x_user_id)
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+        )
+        user_id: str | None = payload.get("sub")
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,7 +117,7 @@ def authorised_project(
 ) -> Project:
     """Load a project only if the caller's roles grant it.
 
-    Returns 404 rather than 403 on purpose: a user who cannot reach a project
+    Returns 404 rather than 403: a user who cannot reach a project
     should not learn that it exists.
     """
     allowed = {p.id for p in projects_for_user(db, user)}

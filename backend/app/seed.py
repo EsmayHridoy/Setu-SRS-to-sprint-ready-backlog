@@ -8,6 +8,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from .models import Artifact, Project, Role, User
+from .security import hash_password
 
 ROLES = [
     ("Platform Admin", "Manages roles, projects and user access.", True),
@@ -186,6 +187,15 @@ def seed(db: Session) -> bool:
 
     for role_name, project_names in GRANTS.items():
         roles[role_name].projects = [projects[n] for n in project_names]
+
+    # The system admin account. Password is abc123$ — change via the admin panel.
+    db.add(User(
+        name="Admin",
+        email="admin@setu.local",
+        job_title="System Administrator",
+        password_hash=hash_password("abc123$"),
+        roles=[roles["Platform Admin"]],
+    ))
 
     for name, email, title, role_names in USERS:
         db.add(User(name=name, email=email, job_title=title,

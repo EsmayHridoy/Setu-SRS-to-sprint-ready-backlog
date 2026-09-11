@@ -80,6 +80,10 @@ class Settings:
         #              print(Fernet.generate_key().decode())"
         self.secret_key = os.getenv("SETU_SECRET_KEY", "")
 
+        self.jwt_secret = os.getenv("JWT_SECRET", "dev-jwt-secret-change-in-production")
+        self.jwt_algorithm = "HS256"
+        self.jwt_expire_minutes = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
+
         self.cors_origins = os.getenv(
             "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
         ).split(",")

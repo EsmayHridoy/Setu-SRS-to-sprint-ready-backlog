@@ -14,9 +14,9 @@ from .. import crypto
 from ..db import get_db
 from ..models import Artifact, AuditEvent, Project, Role, User
 from ..schemas import (
-    AuditOut, ProjectIn, ProjectOut, RoleIn, RoleOut, UserIn, UserOut,
+    AuditOut, ProjectIn, ProjectOut, ResetPasswordIn, RoleIn, RoleOut, UserIn, UserOut,
 )
-from ..security import require_admin
+from ..security import hash_password, require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -206,11 +206,17 @@ def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
              status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserIn, db: Session = Depends(get_db),
                 actor: User = Depends(require_admin)):
-    """Create a user and assign their roles. Email addresses must be unique."""
+    """Create a user and assign their roles. Email addresses must be unique.
+    A password is required for the new account to be able to log in."""
+    if not payload.password:
+        raise HTTPException(400, "A password is required when creating a user.")
     if db.query(User).filter(User.email == str(payload.email)).first():
         raise HTTPException(409, "That email address is already in use.")
-    user = User(name=payload.name, email=str(payload.email),
-                job_title=payload.job_title, is_active=payload.is_active)
+    user = User(
+        name=payload.name, email=str(payload.email),
+        job_title=payload.job_title, is_active=payload.is_active,
+        password_hash=hash_password(payload.password),
+    )
     user.roles = _load_roles(db, payload.role_ids)
     db.add(user)
     db.flush()
@@ -237,6 +243,8 @@ def update_user(user_id: str, payload: UserIn, db: Session = Depends(get_db),
     user.job_title = payload.job_title
     user.is_active = payload.is_active
     user.roles = _load_roles(db, payload.role_ids)
+    if payload.password:
+        user.password_hash = hash_password(payload.password)
 
     # Do not let an administrator lock every admin out of the panel.
     if was_admin and not user.is_admin and _admin_count(db, exclude=user.id) == 0:
@@ -265,6 +273,19 @@ def delete_user(user_id: str, db: Session = Depends(get_db),
             409, "This is the last account with administrator access.")
     record(db, actor, "user", user.id, "deleted", user.email)
     db.delete(user)
+    db.commit()
+
+
+@router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(user_id: str, payload: ResetPasswordIn,
+                   db: Session = Depends(get_db),
+                   actor: User = Depends(require_admin)):
+    """Reset any user's password. No knowledge of the old password is required."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "User not found.")
+    user.password_hash = hash_password(payload.new_password)
+    record(db, actor, "user", user.id, "password_reset", user.email)
     db.commit()
 
 

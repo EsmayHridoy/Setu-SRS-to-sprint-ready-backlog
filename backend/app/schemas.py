@@ -93,6 +93,26 @@ class UserIn(BaseModel):
     job_title: str = ""
     is_active: bool = True
     role_ids: list[str] = []
+    password: str | None = None
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=6)
+
+
+class ResetPasswordIn(BaseModel):
+    new_password: str = Field(min_length=6)
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 class SessionOut(BaseModel):

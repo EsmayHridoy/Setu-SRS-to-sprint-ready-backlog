@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { api, setToken, getToken } from './api';
 import setuLogo from './assets/setu_logo.svg';
 
-const STORAGE_KEY = 'setu_user_id';
-
 export default function App() {
-  const [accounts, setAccounts] = useState([]);
-  const [userId, setUserId] = useState(() => localStorage.getItem(STORAGE_KEY) || '');
   const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -15,9 +12,10 @@ export default function App() {
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messageText, setMessageText] = useState('');
-  const [attachment, setAttachment] = useState(null); // { file, filename, size }
+  const [attachment, setAttachment] = useState(null);
   const [streaming, setStreaming] = useState(false);
-  const [tab, setTab] = useState('chat'); // chat | admin
+  const [tab, setTab] = useState('chat');
+  const [showChangePwd, setShowChangePwd] = useState(false);
 
   // Admin state
   const [adminRoles, setAdminRoles] = useState([]);
@@ -28,25 +26,26 @@ export default function App() {
   const threadEndRef = useRef(null);
   const abortRef = useRef(null);
 
+  // On mount, try to restore session from a stored token.
   useEffect(() => {
-    api
-      .listAccounts()
-      .then(setAccounts)
-      .catch((e) => setError(e.message));
+    if (!getToken()) {
+      setAuthChecked(true);
+      return;
+    }
+    api.getSession()
+      .then((s) => {
+        setSession(s);
+        if (s.projects?.length) setProjectId(s.projects[0].id);
+      })
+      .catch(() => {
+        setToken('');
+      })
+      .finally(() => setAuthChecked(false));
   }, []);
 
   useEffect(() => {
-    if (!userId) {
-      setSession(null);
-      return;
-    }
-    localStorage.setItem(STORAGE_KEY, userId);
-    loadSession(userId);
-  }, [userId]);
-
-  useEffect(() => {
-    if (userId && projectId) loadConversations(projectId);
-  }, [userId, projectId]);
+    if (session && projectId) loadConversations(projectId);
+  }, [session, projectId]);
 
   const msgs = activeConversation?.messages;
   const lastMsg = msgs?.[msgs.length - 1];
@@ -54,28 +53,11 @@ export default function App() {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [msgs?.length, lastMsg?.content]);
 
-  async function loadSession(id) {
-    setLoading(true);
-    setError('');
-    try {
-      const s = await api.getSession(id);
-      setSession(s);
-      if (s.projects?.length && !projectId) {
-        setProjectId(s.projects[0].id);
-      }
-    } catch (e) {
-      setError(e.message);
-      setSession(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function loadConversations(pid = projectId) {
-    if (!userId) return;
+    if (!session) return;
     setError('');
     try {
-      const list = await api.listConversations(userId, pid || undefined);
+      const list = await api.listConversations(pid || undefined);
       setConversations(list);
     } catch (e) {
       setError(e.message);
@@ -85,7 +67,7 @@ export default function App() {
   async function openConversation(id) {
     setError('');
     try {
-      const detail = await api.getConversation(userId, id);
+      const detail = await api.getConversation(id);
       setActiveConversation(detail);
     } catch (e) {
       setError(e.message);
@@ -93,13 +75,10 @@ export default function App() {
   }
 
   async function createConversation() {
-    if (!projectId) {
-      setError('Select a project first');
-      return;
-    }
+    if (!projectId) { setError('Select a project first'); return; }
     setError('');
     try {
-      const conv = await api.createConversation(userId, projectId);
+      const conv = await api.createConversation(projectId);
       await loadConversations();
       await openConversation(conv.id);
     } catch (e) {
@@ -110,7 +89,7 @@ export default function App() {
   async function deleteConversation(id) {
     setError('');
     try {
-      await api.deleteConversation(userId, id);
+      await api.deleteConversation(id);
       if (activeConversation?.id === id) setActiveConversation(null);
       await loadConversations();
     } catch (e) {
@@ -168,8 +147,8 @@ export default function App() {
     };
 
     try {
-      if (att) await api.streamUpload(userId, convId, att.file, text, handlers, ctrl.signal);
-      else await api.streamMessage(userId, convId, text, handlers, ctrl.signal);
+      if (att) await api.streamUpload(convId, att.file, text, handlers, ctrl.signal);
+      else await api.streamMessage(convId, text, handlers, ctrl.signal);
       await loadConversations();
     } catch (err) {
       if (ctrl.signal.aborted) {
@@ -203,15 +182,15 @@ export default function App() {
   }
 
   async function loadAdmin() {
-    if (!userId || !session?.is_admin) return;
+    if (!session?.is_admin) return;
     setError('');
     setLoading(true);
     try {
       const [roles, projects, users, audit] = await Promise.all([
-        api.admin.listRoles(userId),
-        api.admin.listProjects(userId),
-        api.admin.listUsers(userId),
-        api.admin.listAudit(userId, 50),
+        api.admin.listRoles(),
+        api.admin.listProjects(),
+        api.admin.listUsers(),
+        api.admin.listAudit(50),
       ]);
       setAdminRoles(roles);
       setAdminProjects(projects);
@@ -225,12 +204,12 @@ export default function App() {
   }
 
   function logout() {
-    localStorage.removeItem(STORAGE_KEY);
-    setUserId('');
+    setToken('');
     setSession(null);
     setActiveConversation(null);
     setConversations([]);
     setTab('chat');
+    setError('');
   }
 
   function onComposerKeyDown(e) {
@@ -241,32 +220,28 @@ export default function App() {
   }
 
   // ---------- Login screen ----------
-  if (!userId) {
+  if (!session) {
     return (
-      <div className="login-screen">
-        <div className="login-card">
-          <div className="login-logo-wrap">
-            <img src={setuLogo} alt="Setu" className="login-logo" />
-          </div>
-          <p className="login-sub">Choose an account to start chatting</p>
-          {error && <div className="alert error">{error}</div>}
-          <ul className="account-list">
-            {accounts.map((a) => (
-              <li key={a.id}>
-                <button type="button" onClick={() => setUserId(a.id)}>
-                  <span className="acct-avatar">{(a.name || '?').charAt(0)}</span>
-                  <span className="acct-body">
-                    <span className="acct-name">{a.name}</span>
-                    <span className="acct-meta">
-                      {a.email} · {a.roles?.map((r) => r.name).join(', ')}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      <LoginScreen
+        loading={loading}
+        error={error}
+        onLogin={async (email, password) => {
+          setLoading(true);
+          setError('');
+          try {
+            const { access_token } = await api.login(email, password);
+            setToken(access_token);
+            const s = await api.getSession();
+            setSession(s);
+            if (s.projects?.length) setProjectId(s.projects[0].id);
+          } catch (e) {
+            setToken('');
+            setError(e.message.replace(/^4\d\d: /, ''));
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
     );
   }
 
@@ -369,14 +344,23 @@ export default function App() {
             </span>
             <span className="user-chip-body">
               <span className="user-chip-name">
-                {session?.user?.name || userId}
+                {session?.user?.name}
                 {session?.is_admin && <span className="badge">admin</span>}
               </span>
             </span>
+            <button type="button" className="side-link tiny" onClick={() => setShowChangePwd(true)}>
+              Password
+            </button>
             <button type="button" className="side-link tiny" onClick={logout}>
-              Switch
+              Sign out
             </button>
           </div>
+
+          {showChangePwd && (
+            <Modal title="Change password" onClose={() => setShowChangePwd(false)}>
+              <ChangePasswordModal onClose={() => setShowChangePwd(false)} onError={setError} />
+            </Modal>
+          )}
         </div>
       </aside>
 
@@ -386,7 +370,6 @@ export default function App() {
 
         {tab === 'admin' && session?.is_admin ? (
           <AdminView
-            userId={userId}
             loading={loading}
             onRefresh={loadAdmin}
             onError={setError}
@@ -403,7 +386,6 @@ export default function App() {
                   <Message
                     key={m.id}
                     m={m}
-                    userId={userId}
                     onError={setError}
                     onGrow={() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
                   />
@@ -449,9 +431,9 @@ export default function App() {
                   setAttachment(null);
                   setError('');
                   try {
-                    const conv = await api.createConversation(userId, projectId);
+                    const conv = await api.createConversation(projectId);
                     await loadConversations();
-                    const detail = await api.getConversation(userId, conv.id);
+                    const detail = await api.getConversation(conv.id);
                     setActiveConversation(detail);
                     await doStream(conv.id, text, att);
                   } catch (ex) {
@@ -479,10 +461,60 @@ export default function App() {
   );
 }
 
-// Split a user message into its optional document marker and the typed
-// question, so an uploaded PDF/DOCX shows as a compact chip. The extracted text
-// itself now arrives as the assistant reply, so the marker carries only a
-// filename (no embedded body).
+// ---------- Login screen ----------
+
+function LoginScreen({ loading, error, onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    await onLogin(email.trim(), password);
+  }
+
+  return (
+    <div className="login-screen">
+      <div className="login-card">
+        <div className="login-logo-wrap">
+          <img src={setuLogo} alt="Setu" className="login-logo" />
+        </div>
+        <p className="login-sub">Sign in to continue</p>
+        {error && <div className="alert error">{error}</div>}
+        <form onSubmit={handleSubmit} className="login-form">
+          <label className="form-field">
+            <span className="form-label">Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoFocus
+              autoComplete="email"
+              placeholder="you@example.com"
+            />
+          </label>
+          <label className="form-field">
+            <span className="form-label">Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+              placeholder="••••••••"
+            />
+          </label>
+          <button type="submit" className="save-btn" disabled={loading}>
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Message parsing ----------
+
 function parseUserContent(content) {
   const up = content.match(/^\[Uploaded document: (.+?)\](?:\n\n)?/);
   if (up) {
@@ -491,7 +523,7 @@ function parseUserContent(content) {
   return { question: content, doc: null };
 }
 
-function Message({ m, userId, onError, onGrow }) {
+function Message({ m, onError, onGrow }) {
   const isUser = m.role?.toLowerCase() === 'user';
   const isEmpty = !m.content;
   const parsed = isUser ? parseUserContent(m.content) : null;
@@ -520,9 +552,7 @@ function Message({ m, userId, onError, onGrow }) {
             <span></span>
           </div>
         ) : m.business_plan_id && !m.streaming ? (
-          // The reply's text is the plan's plain-text summary (kept for the
-          // agent's memory); the card is the interactive version of it.
-          <BusinessPlanCard planId={m.business_plan_id} userId={userId} onError={onError} onGrow={onGrow} />
+          <BusinessPlanCard planId={m.business_plan_id} onError={onError} onGrow={onGrow} />
         ) : (
           <>
             <div className="msg-text">
@@ -561,12 +591,7 @@ let draftKey = 0;
 const toDraft = (items) =>
   items.map((i) => ({ key: i.id, description: i.description, location: i.location }));
 
-// The businesses extracted from a document uploaded in chat. While DRAFT the
-// user reviews them — yes (confirm), no (discard), or edit/remove/add — and
-// once confirmed each is vetted against the repo one at a time, its result
-// shown the moment it arrives over SSE. Reopening a half-vetted plan offers
-// to resume; the server replays finished items and carries on from there.
-function BusinessPlanCard({ planId, userId, onError, onGrow }) {
+function BusinessPlanCard({ planId, onError, onGrow }) {
   const [plan, setPlan] = useState(null);
   const [draft, setDraft] = useState([]);
   const [dirty, setDirty] = useState(false);
@@ -578,7 +603,7 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
   useEffect(() => {
     let cancelled = false;
     api.business
-      .getPlan(userId, planId)
+      .getPlan(planId)
       .then((p) => {
         if (cancelled) return;
         setPlan(p);
@@ -589,7 +614,7 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
       cancelled = true;
       abortRef.current?.abort();
     };
-  }, [planId, userId, onError]);
+  }, [planId, onError]);
 
   if (!plan) {
     return (
@@ -621,7 +646,6 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
     setVetting(true);
     try {
       await api.business.streamVetting(
-        userId,
         planId,
         {
           onEvent: (event, data) => {
@@ -633,7 +657,6 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
               onGrow();
             }
           },
-          // `done` carries the plan without its items; keep the ones we have.
           onDone: (data) => setPlan((p) => ({ ...p, ...data })),
         },
         controller.signal,
@@ -653,14 +676,13 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
       let current = plan;
       if (dirty) {
         current = await api.business.updateItems(
-          userId,
           planId,
           kept.map(({ description, location }) => ({ description: description.trim(), location })),
         );
         setDraft(toDraft(current.items));
         setDirty(false);
       }
-      const confirmed = await api.business.confirm(userId, planId);
+      const confirmed = await api.business.confirm(planId);
       setPlan({ ...current, ...confirmed });
     } catch (e) {
       onError(e.message);
@@ -675,7 +697,7 @@ function BusinessPlanCard({ planId, userId, onError, onGrow }) {
     setBusy(true);
     onError('');
     try {
-      const discarded = await api.business.discard(userId, planId);
+      const discarded = await api.business.discard(planId);
       setPlan((p) => ({ ...p, ...discarded }));
     } catch (e) {
       onError(e.message);
@@ -923,21 +945,120 @@ function Composer({
   );
 }
 
-function AdminView({ userId, loading, onRefresh, onError, roles, projects, users, audit }) {
-  // modal = { type: 'role' | 'project' | 'user', entity: object | null }
+function ChangePasswordModal({ onClose, onError }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handle(e) {
+    e.preventDefault();
+    setErr('');
+    if (next !== confirm) { setErr('New passwords do not match.'); return; }
+    if (next.length < 6) { setErr('New password must be at least 6 characters.'); return; }
+    setBusy(true);
+    try {
+      await api.changePassword(current, next);
+      onClose();
+    } catch (ex) {
+      setErr(ex.message.replace(/^\d+: /, ''));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handle} className="modal-form">
+      <label className="form-field">
+        <span className="form-label">Current password</span>
+        <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+          required autoFocus autoComplete="current-password" />
+      </label>
+      <label className="form-field">
+        <span className="form-label">New password <em>(min 6 characters)</em></span>
+        <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+          required autoComplete="new-password" />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Confirm new password</span>
+        <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+          required autoComplete="new-password" />
+      </label>
+      {err && <div className="alert error">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="ghost-btn" onClick={onClose}>Cancel</button>
+        <button type="submit" className="save-btn" disabled={busy}>
+          {busy ? 'Saving…' : 'Change password'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ResetPasswordModal({ user, onClose, onError }) {
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handle(e) {
+    e.preventDefault();
+    setErr('');
+    if (next !== confirm) { setErr('Passwords do not match.'); return; }
+    if (next.length < 6) { setErr('Password must be at least 6 characters.'); return; }
+    setBusy(true);
+    try {
+      await api.admin.resetPassword(user.id, next);
+      onClose();
+    } catch (ex) {
+      setErr(ex.message.replace(/^\d+: /, ''));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handle} className="modal-form">
+      <p className="modal-desc">
+        Reset password for <strong>{user.name}</strong>. The previous password is not required.
+      </p>
+      <label className="form-field">
+        <span className="form-label">New password <em>(min 6 characters)</em></span>
+        <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+          required autoFocus autoComplete="new-password" />
+      </label>
+      <label className="form-field">
+        <span className="form-label">Confirm new password</span>
+        <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+          required autoComplete="new-password" />
+      </label>
+      {err && <div className="alert error">{err}</div>}
+      <div className="modal-actions">
+        <button type="button" className="ghost-btn" onClick={onClose}>Cancel</button>
+        <button type="submit" className="save-btn" disabled={busy}>
+          {busy ? 'Saving…' : 'Reset password'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function AdminView({ loading, onRefresh, onError, roles, projects, users, audit }) {
   const [modal, setModal] = useState(null);
+  const [resetTarget, setResetTarget] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const close = () => setModal(null);
 
   async function remove(kind, entity) {
     const label = entity.name || entity.email;
-    if (!window.confirm(`Delete ${kind} “${label}”? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete ${kind} "${label}"? This cannot be undone.`)) return;
     onError('');
     try {
-      if (kind === 'role') await api.admin.deleteRole(userId, entity.id);
-      else if (kind === 'project') await api.admin.deleteProject(userId, entity.id);
-      else await api.admin.deleteUser(userId, entity.id);
+      if (kind === 'role') await api.admin.deleteRole(entity.id);
+      else if (kind === 'project') await api.admin.deleteProject(entity.id);
+      else await api.admin.deleteUser(entity.id);
       await onRefresh();
     } catch (e) {
       onError(e.message);
@@ -947,7 +1068,7 @@ function AdminView({ userId, loading, onRefresh, onError, roles, projects, users
   async function reindex(id) {
     onError('');
     try {
-      await api.admin.reindexProject(userId, id);
+      await api.admin.reindexProject(id);
       await onRefresh();
     } catch (e) {
       onError(e.message);
@@ -956,20 +1077,18 @@ function AdminView({ userId, loading, onRefresh, onError, roles, projects, users
 
   async function submit(payload) {
     setBusy(true);
-    // Any thrown error propagates to FormShell, which keeps the modal open and
-    // shows it; the `finally` still clears the busy flag.
     try {
       const { type, entity } = modal;
       const id = entity?.id;
       if (type === 'role') {
-        if (id) await api.admin.updateRole(userId, id, payload);
-        else await api.admin.createRole(userId, payload);
+        if (id) await api.admin.updateRole(id, payload);
+        else await api.admin.createRole(payload);
       } else if (type === 'project') {
-        if (id) await api.admin.updateProject(userId, id, payload);
-        else await api.admin.createProject(userId, payload);
+        if (id) await api.admin.updateProject(id, payload);
+        else await api.admin.createProject(payload);
       } else {
-        if (id) await api.admin.updateUser(userId, id, payload);
-        else await api.admin.createUser(userId, payload);
+        if (id) await api.admin.updateUser(id, payload);
+        else await api.admin.createUser(payload);
       }
       close();
       await onRefresh();
@@ -1052,6 +1171,9 @@ function AdminView({ userId, loading, onRefresh, onError, roles, projects, users
                 <strong>{u.name}</strong> ({u.email}) — {u.roles?.map((r) => r.name).join(', ') || 'no roles'}
               </span>
               {!u.is_active && <span className="badge muted">inactive</span>}
+              <button type="button" onClick={() => setResetTarget(u)}>
+                Reset pwd
+              </button>
               <button type="button" onClick={() => setModal({ type: 'user', entity: u })}>
                 Edit
               </button>
@@ -1088,6 +1210,16 @@ function AdminView({ userId, loading, onRefresh, onError, roles, projects, users
           )}
         </Modal>
       )}
+
+      {resetTarget && (
+        <Modal title="Reset password" onClose={() => setResetTarget(null)}>
+          <ResetPasswordModal
+            user={resetTarget}
+            onClose={() => setResetTarget(null)}
+            onError={onError}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1114,7 +1246,6 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-/** Wraps a form: manages the submit error and shared footer buttons. */
 function FormShell({ busy, onSubmit, onCancel, buildPayload, children }) {
   const [err, setErr] = useState('');
   async function handle(e) {
@@ -1214,7 +1345,9 @@ function UserForm({ entity, roles, busy, onSubmit, onCancel }) {
   const [jobTitle, setJobTitle] = useState(entity?.job_title || '');
   const [isActive, setIsActive] = useState(entity ? entity.is_active : true);
   const [roleIds, setRoleIds] = useState(entity?.roles?.map((r) => r.id) || []);
+  const [password, setPassword] = useState('');
 
+  const isEdit = Boolean(entity);
   const toggle = (id) =>
     setRoleIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
@@ -1223,13 +1356,17 @@ function UserForm({ entity, roles, busy, onSubmit, onCancel }) {
       busy={busy}
       onSubmit={onSubmit}
       onCancel={onCancel}
-      buildPayload={() => ({
-        name,
-        email,
-        job_title: jobTitle,
-        is_active: isActive,
-        role_ids: roleIds,
-      })}
+      buildPayload={() => {
+        const payload = {
+          name,
+          email,
+          job_title: jobTitle,
+          is_active: isActive,
+          role_ids: roleIds,
+        };
+        if (password) payload.password = password;
+        return payload;
+      }}
     >
       <label className="form-field">
         <span className="form-label">Name</span>
@@ -1242,6 +1379,19 @@ function UserForm({ entity, roles, busy, onSubmit, onCancel }) {
       <label className="form-field">
         <span className="form-label">Job title</span>
         <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+      </label>
+      <label className="form-field">
+        <span className="form-label">
+          Password{isEdit && <em> (leave blank to keep current)</em>}
+        </span>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required={!isEdit}
+          autoComplete="new-password"
+          placeholder={isEdit ? 'Leave blank to keep current' : 'Required'}
+        />
       </label>
       <label className="check-row standalone">
         <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
@@ -1281,8 +1431,6 @@ function ProjectForm({ entity, busy, onSubmit, onCancel }) {
           default_branch: branch,
           status,
         };
-        // Only send the token when the admin actually typed one; blank leaves
-        // the stored token untouched (backend treats null as "no change").
         if (token) payload.access_token = token;
         return payload;
       }}

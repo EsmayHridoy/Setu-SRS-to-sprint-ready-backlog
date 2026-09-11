@@ -122,7 +122,4 @@ app.include_router(business.router)
 
 @app.get("/api/health", tags=["system"])
 def health():
-    return {
-        "status": "ok",
-        "users": users,
-    }
+    return {"status": "ok"}

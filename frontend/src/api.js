@@ -1,16 +1,30 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-function headers(userId, json = true) {
+const TOKEN_KEY = 'setu_token';
+
+let _token = localStorage.getItem(TOKEN_KEY) || '';
+
+export function setToken(token) {
+  _token = token;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getToken() {
+  return _token;
+}
+
+function headers(json = true) {
   const h = {};
   if (json) h['Content-Type'] = 'application/json';
-  if (userId) h['X-User-Id'] = userId;
+  if (_token) h['Authorization'] = `Bearer ${_token}`;
   return h;
 }
 
-async function request(path, { method = 'GET', userId, body } = {}) {
+async function request(path, { method = 'GET', body } = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: headers(userId, body !== undefined),
+    headers: headers(body !== undefined),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -33,15 +47,14 @@ async function request(path, { method = 'GET', userId, body } = {}) {
 }
 
 // Opens an SSE stream. Pass `{ json }` for a JSON body or `{ form }` for
-// multipart (a FormData) — with FormData we must let the browser set the
-// Content-Type so the multipart boundary is included. Pass neither for a GET.
-// fetch rather than EventSource, because EventSource can't send X-User-Id.
-async function streamSSE(path, userId, { json, form } = {}, handlers, signal) {
+// multipart (a FormData) — with FormData the browser sets Content-Type.
+// Pass neither for a GET.
+async function streamSSE(path, { json, form } = {}, handlers, signal) {
   const isForm = form !== undefined;
   const hasBody = isForm || json !== undefined;
   const res = await fetch(`${API_BASE}${path}`, {
     method: hasBody ? 'POST' : 'GET',
-    headers: headers(userId, hasBody && !isForm),
+    headers: headers(hasBody && !isForm),
     body: isForm ? form : hasBody ? JSON.stringify(json) : undefined,
     signal,
   });
@@ -61,8 +74,6 @@ async function streamSSE(path, userId, { json, form } = {}, handlers, signal) {
   const decoder = new TextDecoder();
   let buffer = '';
 
-  // SSE frames are separated by a blank line. Buffer partial reads until we
-  // have a whole frame, then parse its `event:` and `data:` lines.
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -101,37 +112,37 @@ export const api = {
   health: () => request('/api/health'),
 
   // Auth
-  listAccounts: () => request('/api/auth/accounts'),
-  getSession: (userId) => request('/api/auth/session', { userId }),
+  login: (email, password) =>
+    request('/api/auth/login', { method: 'POST', body: { email, password } }),
+  getSession: () => request('/api/auth/session'),
+  changePassword: (current_password, new_password) =>
+    request('/api/auth/change-password', { method: 'POST', body: { current_password, new_password } }),
 
   // Projects (caller grants)
-  listProjects: (userId) => request('/api/projects', { userId }),
+  listProjects: () => request('/api/projects'),
 
   // Conversations / chat
-  listConversations: (userId, projectId) => {
+  listConversations: (projectId) => {
     const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return request(`/api/conversations${q}`, { userId });
+    return request(`/api/conversations${q}`);
   },
-  createConversation: (userId, projectId) =>
-    request('/api/conversations', { method: 'POST', userId, body: { project_id: projectId } }),
-  getConversation: (userId, id) => request(`/api/conversations/${id}`, { userId }),
-  deleteConversation: (userId, id) =>
-    request(`/api/conversations/${id}`, { method: 'DELETE', userId }),
-  sendMessage: (userId, conversationId, content) =>
+  createConversation: (projectId) =>
+    request('/api/conversations', { method: 'POST', body: { project_id: projectId } }),
+  getConversation: (id) => request(`/api/conversations/${id}`),
+  deleteConversation: (id) =>
+    request(`/api/conversations/${id}`, { method: 'DELETE' }),
+  sendMessage: (conversationId, content) =>
     request(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
-      userId,
       body: { content },
     }),
 
-  // Upload a PDF/DOCX and get its extracted plain text back. The browser sets
-  // the multipart Content-Type (with boundary), so we must not set it here.
-  extractFile: async (userId, file) => {
+  extractFile: async (file) => {
     const form = new FormData();
     form.append('file', file);
     const res = await fetch(`${API_BASE}/api/uploads/extract`, {
       method: 'POST',
-      headers: headers(userId, false),
+      headers: headers(false),
       body: form,
     });
     const text = await res.text();
@@ -148,82 +159,72 @@ export const api = {
     return data;
   },
 
-  // Streaming reply over Server-Sent Events. Calls the handlers as frames
-  // arrive: onStart({ conversation, user_message, reply_id }), onDelta(text),
-  // onDone({ conversation, reply }). Returns a promise that resolves when the
-  // stream ends. Pass `signal` (an AbortSignal) to cancel.
-  streamMessage: (userId, conversationId, content, handlers = {}, signal) =>
+  streamMessage: (conversationId, content, handlers = {}, signal) =>
     streamSSE(
       `/api/conversations/${conversationId}/messages/stream`,
-      userId,
       { json: { content } },
       handlers,
       signal,
     ),
 
-  // Upload a PDF/DOCX over the same SSE frames as streamMessage. With the real
-  // model on, the reply carries a business_plan_id: the businesses extracted
-  // from the document, for the user to review and vet (see `business`).
-  streamUpload: (userId, conversationId, file, prompt, handlers = {}, signal) => {
+  streamUpload: (conversationId, file, prompt, handlers = {}, signal) => {
     const form = new FormData();
     form.append('file', file);
     if (prompt) form.append('prompt', prompt);
     return streamSSE(
       `/api/conversations/${conversationId}/messages/upload`,
-      userId,
       { form },
       handlers,
       signal,
     );
   },
 
-  // Business plans: review a document's extracted businesses, then vet them.
+  // Business plans
   business: {
-    getPlan: (userId, id) => request(`/api/business-plans/${id}`, { userId }),
-    // Replaces the draft's whole item list: [{ description, location }].
-    updateItems: (userId, id, items) =>
-      request(`/api/business-plans/${id}/items`, { method: 'PATCH', userId, body: { items } }),
-    confirm: (userId, id) =>
-      request(`/api/business-plans/${id}/confirm`, { method: 'POST', userId }),
-    discard: (userId, id) =>
-      request(`/api/business-plans/${id}/discard`, { method: 'POST', userId }),
-    // Vets one item at a time. handlers.onEvent('item_start', { item_id, ... })
-    // as each begins, onEvent('item_result', item) as each finishes (items
-    // already vetted are replayed first), then onDone(plan).
-    streamVetting: (userId, id, handlers = {}, signal) =>
-      streamSSE(`/api/business-plans/${id}/vet/stream`, userId, {}, handlers, signal),
+    getPlan: (id) => request(`/api/business-plans/${id}`),
+    updateItems: (id, items) =>
+      request(`/api/business-plans/${id}/items`, { method: 'PATCH', body: { items } }),
+    confirm: (id) =>
+      request(`/api/business-plans/${id}/confirm`, { method: 'POST' }),
+    discard: (id) =>
+      request(`/api/business-plans/${id}/discard`, { method: 'POST' }),
+    streamVetting: (id, handlers = {}, signal) =>
+      streamSSE(`/api/business-plans/${id}/vet/stream`, {}, handlers, signal),
   },
 
   // Admin
   admin: {
-    listRoles: (userId) => request('/api/admin/roles', { userId }),
-    createRole: (userId, body) =>
-      request('/api/admin/roles', { method: 'POST', userId, body }),
-    updateRole: (userId, id, body) =>
-      request(`/api/admin/roles/${id}`, { method: 'PUT', userId, body }),
-    deleteRole: (userId, id) =>
-      request(`/api/admin/roles/${id}`, { method: 'DELETE', userId }),
+    listRoles: () => request('/api/admin/roles'),
+    createRole: (body) =>
+      request('/api/admin/roles', { method: 'POST', body }),
+    updateRole: (id, body) =>
+      request(`/api/admin/roles/${id}`, { method: 'PUT', body }),
+    deleteRole: (id) =>
+      request(`/api/admin/roles/${id}`, { method: 'DELETE' }),
 
-    listProjects: (userId) => request('/api/admin/projects', { userId }),
-    createProject: (userId, body) =>
-      request('/api/admin/projects', { method: 'POST', userId, body }),
-    updateProject: (userId, id, body) =>
-      request(`/api/admin/projects/${id}`, { method: 'PUT', userId, body }),
-    deleteProject: (userId, id) =>
-      request(`/api/admin/projects/${id}`, { method: 'DELETE', userId }),
-    reindexProject: (userId, id) =>
-      request(`/api/admin/projects/${id}/reindex`, { method: 'POST', userId }),
+    listProjects: () => request('/api/admin/projects'),
+    createProject: (body) =>
+      request('/api/admin/projects', { method: 'POST', body }),
+    updateProject: (id, body) =>
+      request(`/api/admin/projects/${id}`, { method: 'PUT', body }),
+    deleteProject: (id) =>
+      request(`/api/admin/projects/${id}`, { method: 'DELETE' }),
+    reindexProject: (id) =>
+      request(`/api/admin/projects/${id}/reindex`, { method: 'POST' }),
 
-    listUsers: (userId) => request('/api/admin/users', { userId }),
-    createUser: (userId, body) =>
-      request('/api/admin/users', { method: 'POST', userId, body }),
-    updateUser: (userId, id, body) =>
-      request(`/api/admin/users/${id}`, { method: 'PUT', userId, body }),
-    deleteUser: (userId, id) =>
-      request(`/api/admin/users/${id}`, { method: 'DELETE', userId }),
+    listUsers: () => request('/api/admin/users'),
+    createUser: (body) =>
+      request('/api/admin/users', { method: 'POST', body }),
+    updateUser: (id, body) =>
+      request(`/api/admin/users/${id}`, { method: 'PUT', body }),
+    deleteUser: (id) =>
+      request(`/api/admin/users/${id}`, { method: 'DELETE' }),
 
-    listAudit: (userId, limit = 100) =>
-      request(`/api/admin/audit?limit=${limit}`, { userId }),
+    listAudit: (limit = 100) =>
+      request(`/api/admin/audit?limit=${limit}`),
+
+    resetPassword: (id, new_password) =>
+      request(`/api/admin/users/${id}/reset-password`, { method: 'POST', body: { new_password } }),
   },
 };
 

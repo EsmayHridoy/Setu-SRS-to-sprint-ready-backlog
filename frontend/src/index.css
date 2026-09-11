@@ -97,6 +97,45 @@ button {
   color: var(--text-muted);
 }
 
+.login-form {
+  display: grid;
+  gap: 16px;
+  text-align: left;
+}
+
+.login-form .form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.login-form .form-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.login-form input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  background: var(--bg-input);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.login-form input:focus {
+  border-color: var(--accent);
+}
+
+.login-form .save-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
 .brand-mark {
   width: 52px;
   height: 52px;
@@ -1084,6 +1123,12 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.modal-desc {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
 }
 
 .form-field {
