@@ -268,7 +268,7 @@ async def vet_business_stream(description: str, *, user_id: str,
             elif kind == FINAL:
                 final_text = text
     finally:
-        await toolset.close()
+        await github_mcp.close_toolset(toolset)
 
     parsed = _parse_json(final_text, "vetting")
     if parsed is None:

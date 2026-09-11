@@ -253,6 +253,10 @@ class BusinessPlanItemsIn(BaseModel):
     items: list[BusinessItemEdit]
 
 
+class BusinessItemDescriptionIn(BaseModel):
+    description: str = Field(min_length=1, max_length=2_000)
+
+
 # --- audit -------------------------------------------------------------------
 
 class AuditOut(ORM):

@@ -184,6 +184,12 @@ export const api = {
     getPlan: (id) => request(`/api/business-plans/${id}`),
     updateItems: (id, items) =>
       request(`/api/business-plans/${id}/items`, { method: 'PATCH', body: { items } }),
+    // One business still waiting to be vetted, e.g. while vetting is paused.
+    updatePendingItem: (id, itemId, description) =>
+      request(`/api/business-plans/${id}/items/${itemId}`, {
+        method: 'PATCH',
+        body: { description },
+      }),
     confirm: (id) =>
       request(`/api/business-plans/${id}/confirm`, { method: 'POST' }),
     discard: (id) =>
