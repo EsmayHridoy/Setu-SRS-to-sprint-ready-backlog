@@ -20,7 +20,14 @@ stages:
   - build
 
 variables:
-  DOCKER_TLS_CERTDIR: "/certs"
+  # Deliberately no TLS between the docker CLI and the dind service: setting
+  # DOCKER_TLS_CERTDIR="/certs" makes dind listen on the encrypted port 2376
+  # only, but without also pointing DOCKER_HOST at tcp://docker:2376 the CLI
+  # keeps trying the default plain port 2375 and fails with "Cannot connect
+  # to the Docker daemon at tcp://docker:2375" -- dind is actually up, just
+  # on a port nothing is asking for. Leaving this empty keeps dind on plain
+  # 2375, matching the CLI's own default; fine for this internal CI network.
+  DOCKER_TLS_CERTDIR: ""
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   VITE_API_BASE_URL: "http://localhost:8001"
