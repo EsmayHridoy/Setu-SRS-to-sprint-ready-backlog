@@ -4,7 +4,7 @@
   --bg-sidebar: #08111e;
   --bg-panel: #112038;
   --bg-input: #182e4a;
-  --bg-user-bubble: rgba(236, 0, 140, 0.18);
+  --bg-user-bubble: rgba(36, 123, 255, 0.14);
   --bg-hover: #1b3052;
   --border: #1c3060;
   --border-strong: #254a7a;
@@ -12,9 +12,9 @@
   --text-muted: #7898c0;
   --text-faint: #405a82;
   --navy: #dce9f8;
-  --accent: #ec008c;
-  --accent-hover: #cc007a;
-  --accent-soft: rgba(236, 0, 140, 0.15);
+  --accent: #247bff;
+  --accent-hover: #1a6de0;
+  --accent-soft: rgba(36, 123, 255, 0.15);
   --danger: #ff4d6d;
   --radius: 10px;
   --radius-sm: 7px;
@@ -86,6 +86,7 @@ button {
   --bg-hover: #eef1f6;
   --border: #e4e8ef;
   --border-strong: #cfd6e0;
+  --accent-soft: rgba(36, 123, 255, 0.12);
 }
 
 .login-logo-wrap {
