@@ -188,7 +188,8 @@ async def send_message(conversation_id: str, payload: NewMessage,
         user_message = _persist_user_message(db, conversation, question)
         try:
             content = await chat_agent.answer(
-                conversation.project.name, question, user_id=user.id,
+                conversation.project.name, question,
+                project_id=conversation.project_id, user_id=user.id,
                 history=history,
             )
         except RuntimeError as exc:
@@ -260,6 +261,7 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
     conversation_out = _out(conversation).model_dump(mode="json")
     user_message_out = MessageOut.model_validate(user_message).model_dump(mode="json")
     conversation_id = conversation.id
+    project_id = conversation.project_id
 
     async def event_stream():
         session = SessionLocal()
@@ -280,7 +282,8 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             final_text = ""
             try:
                 async for kind, text in chat_agent.answer_stream(
-                    project_name, question, user_id=user_id, history=history,
+                    project_name, question, project_id=project_id,
+                    user_id=user_id, history=history,
                 ):
                     if kind == adk_runner.FINAL:
                         final_text = text
