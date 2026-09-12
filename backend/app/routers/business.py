@@ -19,20 +19,25 @@ precomputing everything up front instead).
 """
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, UploadFile, status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
-from .. import business_agent, chat_memory, extraction, github_mcp
+from .. import (
+    business_agent, chat_memory, extraction, github_mcp, srs_agent, srs_docx,
+)
 from ..db import SessionLocal, get_db
-from ..models import BusinessItem, BusinessPlan, Message, User
+from ..models import BusinessItem, BusinessPlan, Message, SrsDocument, User
 from ..schemas import (
     BusinessItemDescriptionIn, BusinessItemOut, BusinessPlanDetail,
-    BusinessPlanItemsIn, BusinessPlanOut,
+    BusinessPlanItemsIn, BusinessPlanOut, SrsDocumentOut,
 )
 from ..security import authorised_project, current_user, projects_for_user
 from ..sse import SSE_HEADERS, sse_event
@@ -297,3 +302,223 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers=SSE_HEADERS)
+
+
+# --- SRS generation ----------------------------------------------------------
+#
+# The step after a plan is vetted: the user may hand over their own SRS format
+# (a .docx) and get it back with every vetted story written into the section it
+# belongs in. DOCX only -- unlike the extraction endpoints, which also accept
+# PDF, there is no way to write structured content back into a PDF.
+#
+# Both the uploaded format and the generated file live in the srs_documents
+# row rather than on disk: the container's filesystem does not survive a
+# redeploy, and the download may well come minutes after the upload.
+
+_DOCX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+# A title long enough to identify the story in the document's own outline.
+_TITLE_CHARS = 110
+
+# Content-Disposition is sent as a latin-1 header, so the plain `filename=`
+# form carries an ASCII-only version and `filename*=` the real one.
+_NON_ASCII = re.compile(r"[^\x20-\x7e]")
+_QUOTE_UNSAFE = re.compile(r'["\\]')
+
+
+def _story_title(item: BusinessItem) -> str:
+    """A short name for the story, for the heading it gets in the document.
+
+    The user story's first sentence where there is one -- it reads as a title
+    already ("As a teller, I want to reverse a posted transaction") -- falling
+    back to the extracted description for an item whose vetting left it blank.
+    """
+    source = (item.user_story or item.description or "").strip()
+    first = re.split(r"(?<=[.!?])\s|\n", source, maxsplit=1)[0].strip()
+    title = " ".join((first or source).split())
+    if len(title) > _TITLE_CHARS:
+        title = title[:_TITLE_CHARS].rsplit(" ", 1)[0] + "…"
+    return title or f"Business {item.seq_no}"
+
+
+def _stories(plan: BusinessPlan) -> list[srs_docx.Story]:
+    """The plan's successfully vetted items, in plan order.
+
+    Items that failed vetting are left out: an ERROR row has no story fields
+    to write, and putting its raw description in the SRS would pass off
+    un-vetted text as specified.
+    """
+    stories = []
+    for item in plan.items:
+        if item.vetting_status != "DONE":
+            continue
+        fields = tuple(
+            (key, getattr(item, key) or "")
+            for key, _ in srs_docx.STORY_FIELDS
+            if (getattr(item, key) or "").strip()
+        )
+        if not fields:
+            continue
+        stories.append(srs_docx.Story(seq_no=item.seq_no,
+                                      title=_story_title(item), fields=fields))
+    return stories
+
+
+def _vetted_plan(db: Session, plan_id: str, user: User) -> BusinessPlan:
+    plan = _accessible_plan(db, plan_id, user)
+    if plan.status != "DONE":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Finish vetting this plan before building an SRS from it.",
+        )
+    return plan
+
+
+async def _generate(db: Session, plan: BusinessPlan, srs: SrsDocument,
+                    user_id: str) -> SrsDocument:
+    """Match every vetted story to a section and write the filled-in .docx.
+
+    A failed run is recorded on the row (status ERROR) before the error is
+    raised, so the uploaded format is kept and the user can retry without
+    uploading it again.
+    """
+    stories = _stories(plan)
+    if not stories:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "None of this plan's businesses were vetted successfully, so "
+            "there is nothing to write into an SRS.",
+        )
+
+    try:
+        # Which writer to use depends on what the upload turned out to be: a
+        # blank story template gets its placeholder blocks filled in, and only
+        # a finished specification needs the model to pick sections.
+        shape = srs_docx.read_shape(srs.template_bytes)
+        if shape.mode == srs_docx.TEMPLATE:
+            output, placements, notice = srs_docx.fill_template(
+                srs.template_bytes, stories,
+            )
+        else:
+            assignments = await srs_agent.assign_sections(
+                list(shape.sections), stories, user_id=user_id,
+            )
+            output, placements, notice = srs_docx.build_sections(
+                srs.template_bytes, stories, assignments,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any failure is reported on the row
+        srs.status = "ERROR"
+        srs.error_message = str(exc)
+        srs.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(srs)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"The SRS could not be generated: {exc}",
+        ) from exc
+
+    srs.output_bytes = output
+    srs.status = "READY"
+    srs.notice = notice
+    srs.error_message = ""
+    srs.placements = json.dumps(
+        [{"seq_no": story.seq_no, "section": placements.get(story.seq_no, "")}
+         for story in stories]
+    )
+    srs.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(srs)
+    return srs
+
+
+@router.post("/{plan_id}/srs", response_model=SrsDocumentOut,
+             status_code=status.HTTP_201_CREATED)
+async def upload_srs_format(plan_id: str, file: UploadFile = File(...),
+                            user: User = Depends(current_user),
+                            db: Session = Depends(get_db)):
+    """Take the user's SRS format and return it filled in.
+
+    Uploading again replaces the plan's SRS rather than keeping both: there is
+    one SRS per plan, and a second format means the first was the wrong one.
+    """
+    plan = _vetted_plan(db, plan_id, user)
+
+    name = (file.filename or "").lower()
+    if not name.endswith(".docx") or file.content_type not in (
+        _DOCX_CONTENT_TYPE, "application/octet-stream", None, "",
+    ):
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "The SRS format must be a .docx file. A .doc or PDF cannot be "
+            "written back into.",
+        )
+    data = await file.read()
+    # Parses the file before storing it, so an unreadable upload fails here
+    # with a clear message instead of at generation time.
+    srs_docx.read_shape(data)
+
+    srs = plan.srs
+    if srs is None:
+        srs = SrsDocument(plan_id=plan.id, user_id=user.id)
+        db.add(srs)
+    srs.user_id = user.id
+    srs.template_filename = file.filename or "srs-format.docx"
+    srs.template_bytes = data
+    srs.output_bytes = None
+    srs.status = "UPLOADED"
+    srs.placements = "[]"
+    srs.notice = ""
+    srs.error_message = ""
+    srs.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(srs)
+
+    return SrsDocumentOut.model_validate(
+        await _generate(db, plan, srs, user.id))
+
+
+@router.post("/{plan_id}/srs/regenerate", response_model=SrsDocumentOut)
+async def regenerate_srs(plan_id: str, user: User = Depends(current_user),
+                         db: Session = Depends(get_db)):
+    """Rebuild the SRS from the format already uploaded -- after a failed run,
+    or after more of the plan was vetted."""
+    plan = _vetted_plan(db, plan_id, user)
+    if plan.srs is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "No SRS format has been uploaded for this plan.")
+    return SrsDocumentOut.model_validate(
+        await _generate(db, plan, plan.srs, user.id))
+
+
+@router.get("/{plan_id}/srs/download")
+def download_srs(plan_id: str, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """The finished SRS as a .docx download."""
+    plan = _accessible_plan(db, plan_id, user)
+    srs = plan.srs
+    if srs is None or srs.status != "READY" or not srs.output_bytes:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "This plan has no generated SRS to download yet.",
+        )
+
+    stem = (srs.template_filename or "srs.docx").rsplit(".", 1)[0]
+    filename = f"{stem} - vetted.docx"
+    ascii_name = _QUOTE_UNSAFE.sub("", _NON_ASCII.sub("_", filename))
+    return Response(
+        content=bytes(srs.output_bytes),
+        media_type=_DOCX_CONTENT_TYPE,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+            # The browser reads the name off the header, which a cross-origin
+            # fetch cannot see unless it is exposed.
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )

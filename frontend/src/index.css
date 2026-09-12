@@ -1736,6 +1736,104 @@ select:focus {
   color: var(--danger);
 }
 
+/* ----------------- SRS step (after a plan is vetted) ----------------- */
+.srs-step {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.srs-step .plan-intro {
+  margin-bottom: 10px;
+}
+
+.srs-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.srs-head svg {
+  flex-shrink: 0;
+}
+
+/* Said when the format's own structure could not be used as-is, so it has to
+   read as a caveat rather than as an error. */
+.srs-notice {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.srs-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.srs-placements {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.srs-placements li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.srs-seq {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.srs-arrow {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.srs-section {
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-btn.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* A change-of-mind inside a sentence ("upload a format after all"), not an
+   action worth a button's weight. */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: var(--accent-hover);
+}
+
 /* Scrollbars */
 .conv-scroll::-webkit-scrollbar,
 .thread::-webkit-scrollbar,

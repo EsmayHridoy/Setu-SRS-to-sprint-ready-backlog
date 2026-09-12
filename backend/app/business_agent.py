@@ -24,7 +24,6 @@ parsed straight out of JSON rather than scraped from free text.
 """
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import AsyncIterator
 
@@ -33,7 +32,7 @@ from pydantic import BaseModel
 
 from . import github_mcp
 from .adk_runner import (
-    FINAL, STATUS, build_generate_config, build_model, iter_turn,
+    FINAL, STATUS, build_generate_config, build_model, iter_turn, parse_json,
     run_single_turn,
 )
 from .chat_memory import with_history
@@ -161,33 +160,6 @@ class BusinessVetting(BaseModel):
     verdict: str
 
 
-def _unescape_literal_newlines(value):
-    """Gemini's JSON output sometimes double-escapes the backslash in a
-    multi-line field, e.g. sends the four characters `\\\\n` where valid JSON
-    needs `\\n` to decode to one real newline. json.loads then hands back a
-    string containing the literal two characters backslash-n instead of an
-    actual newline byte, which renders as a visible "\\n" in the UI. Fix it
-    up after parsing rather than trying to prompt the model out of it.
-    """
-    if isinstance(value, str):
-        return value.replace("\\n", "\n").replace("\\t", "\t")
-    if isinstance(value, list):
-        return [_unescape_literal_newlines(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _unescape_literal_newlines(v) for k, v in value.items()}
-    return value
-
-
-def _parse_json(final_text: str, label: str):
-    try:
-        parsed = json.loads(final_text)
-    except (json.JSONDecodeError, TypeError):
-        log.warning("business_agent: could not parse %s output as JSON: %r",
-                   label, final_text[:500])
-        return None
-    return _unescape_literal_newlines(parsed)
-
-
 async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
                              guidance: str = "") -> list[ExtractedBusiness]:
     """Pull a numbered list of business requirements out of a document.
@@ -217,7 +189,7 @@ async def extract_businesses(chunks: list[tuple[str, str]], *, user_id: str,
     final_text = await run_single_turn(
         agent, prompt, app_name=APP_NAME, user_id=user_id,
     )
-    parsed = _parse_json(final_text, "extraction")
+    parsed = parse_json(final_text, "extraction")
     if not isinstance(parsed, list):
         return []
 
@@ -270,7 +242,7 @@ async def vet_business_stream(description: str, *, user_id: str,
     finally:
         await github_mcp.close_toolset(toolset)
 
-    parsed = _parse_json(final_text, "vetting")
+    parsed = parse_json(final_text, "vetting")
     if parsed is None:
         raise RuntimeError(
             "The vetting agent's response could not be parsed as structured "

@@ -6,9 +6,10 @@ too. Freeze them before parallel work starts.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ORM(BaseModel):
@@ -230,6 +231,47 @@ class BusinessItemOut(ORM):
     vetted_at: datetime | None = None
 
 
+class SrsPlacementOut(BaseModel):
+    """Where one vetted story was written in the user's SRS format."""
+    seq_no: int
+    section: str
+
+
+class SrsDocumentOut(ORM):
+    """The state of a plan's SRS: the uploaded format, and whether a filled-in
+    copy is ready to download."""
+    id: str
+    template_filename: str
+    status: str  # UPLOADED | READY | ERROR
+    placements: list[SrsPlacementOut] = []
+    notice: str = ""
+    error_message: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("placements", mode="before")
+    @classmethod
+    def _decode_placements(cls, value):
+        """Accept the JSON string the row stores as well as a real list.
+
+        The column is TEXT, so validating an SrsDocument -- directly, or as
+        the nested `srs` of a BusinessPlanDetail -- hands this field a string.
+        Malformed content is dropped rather than raised: a placement list is a
+        description of what happened, and losing it must not make the SRS
+        itself unreachable.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            rows = json.loads(value or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows
+                if isinstance(r, dict) and "seq_no" in r and "section" in r]
+
+
 class BusinessPlanOut(ORM):
     id: str
     project_id: str
@@ -242,6 +284,8 @@ class BusinessPlanOut(ORM):
 
 class BusinessPlanDetail(BusinessPlanOut):
     items: list[BusinessItemOut] = []
+    # None until the user answers "yes" to uploading an SRS format.
+    srs: SrsDocumentOut | None = None
 
 
 class BusinessItemEdit(BaseModel):

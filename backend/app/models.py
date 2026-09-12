@@ -10,8 +10,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text,
-    UniqueConstraint,
+    Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, String, Table,
+    Text, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -217,6 +217,8 @@ class BusinessPlan(Base):
     items = relationship("BusinessItem", back_populates="plan",
                          cascade="all, delete-orphan",
                          order_by="BusinessItem.seq_no")
+    srs = relationship("SrsDocument", back_populates="plan", uselist=False,
+                       cascade="all, delete-orphan")
 
 
 class BusinessItem(Base):
@@ -275,6 +277,43 @@ class BusinessItem(Base):
     vetted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     plan = relationship("BusinessPlan", back_populates="items")
+
+
+class SrsDocument(Base):
+    """The user's own SRS format, filled in with a vetted plan's stories.
+
+    One per plan (uploading a different format replaces it). Both the
+    uploaded template and the generated output are kept as bytes in the
+    database rather than on disk: the app runs in a container whose
+    filesystem does not survive a redeploy.
+
+    The template is kept after generating so the SRS can be rebuilt -- after
+    resuming vetting, say -- without asking for the file again.
+    """
+    __tablename__ = "srs_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    plan_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_plans.id", ondelete="CASCADE"),
+        unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    template_filename: Mapped[str] = mapped_column(String(300), default="")
+    template_bytes: Mapped[bytes] = mapped_column(LargeBinary)
+    output_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="UPLOADED")  # UPLOADED | READY | ERROR
+
+    # JSON list of {seq_no, section} -- where each story was written.
+    placements: Mapped[str] = mapped_column(Text, default="[]")
+    # Set when the template had no heading outline to match against and the
+    # stories were appended at the end instead, so the UI can say so.
+    notice: Mapped[str] = mapped_column(Text, default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    plan = relationship("BusinessPlan", back_populates="srs")
 
 
 # --- audit -------------------------------------------------------------------
