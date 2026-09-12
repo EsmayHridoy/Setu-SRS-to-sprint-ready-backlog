@@ -1143,6 +1143,19 @@ function splitNumberedList(text) {
   return parts.map((p) => p.replace(/^\d+\.\s*/, ''));
 }
 
+// The Scope field is written as "In scope: ... Out of scope: ..." -- same
+// run-on problem as a numbered list, just a different shape. Split right
+// before "Out of scope" regardless of whether the source had a real line
+// break there.
+function splitScopeStatement(text) {
+  if (!text) return null;
+  const match = text.match(/^(.*?)\s+(out[\s-]of[\s-]scope\s*:.*)$/is);
+  if (!match) return null;
+  const inPart = match[1].trim();
+  const outPart = match[2].trim();
+  return inPart && outPart ? [inPart, outPart] : null;
+}
+
 function NotesBlock({ text }) {
   const points = splitNumberedList(text);
   if (points) {
@@ -1152,6 +1165,16 @@ function NotesBlock({ text }) {
           <li key={i}>{p}</li>
         ))}
       </ol>
+    );
+  }
+  const scoped = splitScopeStatement(text);
+  if (scoped) {
+    return (
+      <div className="vet-notes-lines">
+        {scoped.map((p, i) => (
+          <p key={i}>{p}</p>
+        ))}
+      </div>
     );
   }
   return <p className="vet-notes">{text}</p>;
@@ -1252,6 +1275,12 @@ function VettedItem({ planId, item, running, step, editable, editing, onEdit, on
             <>
               <div className="vet-label">Actors</div>
               <NotesBlock text={item.actors} />
+            </>
+          )}
+          {item.scope && (
+            <>
+              <div className="vet-label">Scope</div>
+              <NotesBlock text={item.scope} />
             </>
           )}
           {item.pre_condition && (

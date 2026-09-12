@@ -287,6 +287,7 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                     item.already_supported = result.already_supported
                     item.user_story = result.user_story
                     item.actors = result.actors
+                    item.scope = result.scope
                     item.pre_condition = result.pre_condition
                     item.impacted_areas = result.impacted_areas
                     item.requirements = result.requirements
@@ -366,6 +367,7 @@ def _vetting_dict(item: BusinessItem) -> dict:
         "already_supported": item.already_supported,
         "user_story": item.user_story,
         "actors": item.actors,
+        "scope": item.scope,
         "pre_condition": item.pre_condition,
         "impacted_areas": item.impacted_areas,
         "requirements": item.requirements,
@@ -449,6 +451,7 @@ async def post_item_comment(plan_id: str, item_id: str,
         item.already_supported = result.already_supported
         item.user_story = result.user_story
         item.actors = result.actors
+        item.scope = result.scope
         item.pre_condition = result.pre_condition
         item.impacted_areas = result.impacted_areas
         item.requirements = result.requirements

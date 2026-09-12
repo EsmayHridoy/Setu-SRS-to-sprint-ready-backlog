@@ -101,6 +101,14 @@ _VETTING_INSTRUCTION_TEMPLATE = (
     "`actors` -- who initiates this and who else is involved You can get knowledge from Role. If the BA "
     "listed actors, check them against the roles the system actually "
     "has; correct or add any that don't match.\n\n"
+    "`scope` -- the boundary of THIS requirement, not where it touches the "
+    "system (that is `impacted_areas`, a different field below): a short "
+    "list of what is in scope (what this specific change does cover) and "
+    "what is explicitly out of scope (related work this change does NOT "
+    "cover, left for later or for a separate requirement). If the BA "
+    "already gave a scope, verify and clean it up; if not, write one "
+    "grounded in the requirement and what you found in the repository. "
+    "Never just repeat `impacted_areas` here.\n\n"
     "`pre_condition` -- what must already be true in the system for this to "
     "work (state, permission, prior step). Ground this in what you actually "
     "find; if the BA listed pre-conditions, verify them.\n\n"
@@ -192,7 +200,7 @@ _DISCUSSION_INSTRUCTION_TEMPLATE = (
     "verdict fields below.\n\n"
     "The remaining fields are the same BRAC IT Change Request vocabulary as "
     "the original vetting -- `is_requirement_clear`, `is_feasible`, "
-    "`already_supported`, `user_story`, `actors`, `pre_condition`, "
+    "`already_supported`, `user_story`, `actors`, `scope`, `pre_condition`, "
     "`impacted_areas`, `requirements`, `acceptance_criteria`, `exceptions`, "
     "`verdict`. Always return the full, current-best value of every one of "
     "them, whether or not this turn changed it -- never leave one blank.\n\n"
@@ -207,6 +215,7 @@ _CURRENT_FIELD_LABELS = (
     ("already_supported", "Already supported"),
     ("user_story", "User Story"),
     ("actors", "Actors"),
+    ("scope", "Scope"),
     ("pre_condition", "Pre-condition"),
     ("impacted_areas", "Impacted Areas"),
     ("requirements", "Requirements"),
@@ -238,6 +247,7 @@ class BusinessVetting(BaseModel):
     already_supported: bool
     user_story: str
     actors: str
+    scope: str
     pre_condition: str
     impacted_areas: str
     requirements: str
@@ -254,6 +264,7 @@ class ItemDiscussionResult(BaseModel):
     already_supported: bool
     user_story: str
     actors: str
+    scope: str
     pre_condition: str
     impacted_areas: str
     requirements: str

@@ -61,6 +61,7 @@ FALLBACK_HEADING = "Vetted Business Requirements"
 STORY_FIELDS = (
     ("user_story", "User Story"),
     ("actors", "Actors"),
+    ("scope", "Scope"),
     ("pre_condition", "Pre-condition"),
     ("impacted_areas", "Impacted Areas"),
     ("requirements", "Requirements"),
@@ -82,6 +83,11 @@ _FIELD_ALIASES = {
     "actor": "actors",
     "actors involved": "actors",
     "stakeholders": "actors",
+    "scope": "scope",
+    "scope of work": "scope",
+    "in scope": "scope",
+    "in scope / out of scope": "scope",
+    "in-scope / out-of-scope": "scope",
     "pre-condition": "pre_condition",
     "pre condition": "pre_condition",
     "precondition": "pre_condition",
@@ -140,6 +146,11 @@ _LEADING_MARKER = re.compile(r"^\s*(?:[-*•·–—]|\(?\d+[.)]|[a-z][.)])\s+")
 # whether the source ever had real line breaks.
 _INLINE_NUMBERED_SPLIT = re.compile(r"\s*(?=\d+\.\s)")
 _INLINE_NUMBERED_ITEM = re.compile(r"^\d+\.\s")
+
+# Same run-on problem, different shape: the `scope` field is written as
+# "In scope: ... Out of scope: ..." in one sentence. Split right before
+# "Out of scope" regardless of whether the source had a real line break.
+_SCOPE_SPLIT = re.compile(r"\s+(?=out[\s-]of[\s-]scope\s*:)", re.IGNORECASE)
 
 # Headings a requirement belongs under when the matching agent gives no usable
 # answer, best first. Substrings of a lowercased heading. Topic mode only.
@@ -337,6 +348,9 @@ def _lines(value: str) -> list[str]:
     if len(raw) == 1:
         parts = [p.strip() for p in _INLINE_NUMBERED_SPLIT.split(raw[0]) if p.strip()]
         if len(parts) >= 2 and all(_INLINE_NUMBERED_ITEM.match(p) for p in parts):
+            return parts
+        parts = [p.strip() for p in _SCOPE_SPLIT.split(raw[0]) if p.strip()]
+        if len(parts) == 2:
             return parts
     return raw
 

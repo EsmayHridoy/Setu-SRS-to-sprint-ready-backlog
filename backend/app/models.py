@@ -253,6 +253,10 @@ class BusinessItem(Base):
     # rather than invented from scratch.
     user_story: Mapped[str] = mapped_column(Text, default="")
     actors: Mapped[str] = mapped_column(Text, default="")
+    # What this specific requirement includes and explicitly excludes --
+    # distinct from impacted_areas, which is *where* in the system it
+    # touches, not what its own boundary is.
+    scope: Mapped[str] = mapped_column(Text, default="")
     pre_condition: Mapped[str] = mapped_column(Text, default="")
     impacted_areas: Mapped[str] = mapped_column(Text, default="")
     requirements: Mapped[str] = mapped_column(Text, default="")

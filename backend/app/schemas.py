@@ -209,6 +209,7 @@ class BusinessItemOut(ORM):
     # BRAC IT's own Change Request / Story template vocabulary.
     user_story: str
     actors: str
+    scope: str = ""
     pre_condition: str
     impacted_areas: str
     requirements: str
