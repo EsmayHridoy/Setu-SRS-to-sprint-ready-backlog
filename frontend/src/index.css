@@ -64,7 +64,7 @@ button {
   content: '';
   position: absolute;
   inset: 0;
-  background: rgba(14, 24, 48, 0.62);
+  background: rgba(80, 0, 40, 0.45);
 }
 
 .login-card {
@@ -73,20 +73,21 @@ button {
   width: 100%;
   max-width: 420px;
   text-align: center;
-  background: rgba(255, 255, 255, 0.97);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: var(--radius-lg);
   padding: 40px 36px 36px;
-  box-shadow: 0 16px 56px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 64px rgba(180, 0, 90, 0.25), 0 4px 16px rgba(0,0,0,0.15);
+  border-top: 3px solid var(--accent);
 }
 
 .login-logo-wrap {
-  padding: 12px 8px;
-  margin-bottom: 20px;
+  padding: 4px 8px;
+  margin-bottom: 16px;
 }
 
 .login-logo {
   width: 100%;
-  max-width: 280px;
+  max-width: 260px;
   height: auto;
   display: block;
   margin: 0 auto;
@@ -95,6 +96,7 @@ button {
 .login-sub {
   margin: 0 0 24px;
   color: var(--text-muted);
+  font-size: 13px;
 }
 
 .login-form {
@@ -471,6 +473,111 @@ select:focus {
   white-space: nowrap;
 }
 
+/* ================= User Menu Popover ================= */
+.user-menu-wrap {
+  position: relative;
+  padding: 6px 4px 2px;
+}
+
+.user-chip-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.15s;
+}
+.user-chip-btn:hover,
+.user-chip-btn.open {
+  background: var(--bg-hover);
+}
+
+.user-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 4px;
+  right: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  z-index: 200;
+  animation: menu-in 0.15s ease;
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.user-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+}
+
+.user-menu-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.user-menu-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-menu-email {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+  text-align: left;
+}
+.user-menu-item:hover {
+  background: var(--bg-hover);
+}
+.user-menu-item.danger {
+  color: var(--danger);
+}
+.user-menu-item.danger:hover {
+  background: rgba(216, 31, 74, 0.07);
+}
+
 .badge {
   font-size: 10px;
   font-weight: 700;
@@ -566,7 +673,7 @@ select:focus {
 
 .welcome-logo {
   width: 100%;
-  max-width: 320px;
+  max-width: 380px;
   height: auto;
   display: block;
   margin: 0 auto;
@@ -614,7 +721,7 @@ select:focus {
   height: 28px;
   flex-shrink: 0;
   border-radius: 7px;
-  background: #0c1828;
+  background: var(--accent);
   display: grid;
   place-items: center;
   margin-top: 2px;

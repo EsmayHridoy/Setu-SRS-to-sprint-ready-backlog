@@ -1,10 +1,10 @@
 -- =====================================================================
 -- Business plans in chat: upgrade an existing database in place.
 --
--- A fresh setu_postgres.sql already includes all of this. Run this only
+-- A fresh db/migrations/V1__initial_schema.sql already includes all of this. Run this only
 -- against a database created before it, to keep its data:
 --
---   psql -h 127.0.0.1 -p 5432 -d setu -f db/migrations/001_business_plans_in_chat.sql
+--   psql -h 127.0.0.1 -p 5432 -d setu -f db/migrations/V2__business_plans_in_chat.sql
 --
 -- Safe to run twice.
 -- =====================================================================

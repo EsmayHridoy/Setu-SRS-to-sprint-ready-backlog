@@ -1,41 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 370 430">
-  <defs>
-    <linearGradient id="setuGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#19D3F3"/>
-      <stop offset="55%" stop-color="#247BFF"/>
-      <stop offset="100%" stop-color="#5148E8"/>
-    </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="7" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  </defs>
-  <g transform="translate(55 55)">
-    <path d="M150 35
-             C92 35 45 70 45 119
-             C45 158 73 180 119 190
-             L190 205
-             C226 213 244 231 244 260
-             C244 307 200 335 142 335
-             C91 335 52 317 25 288"
-          fill="none" stroke="url(#setuGradient)" stroke-width="34"
-          stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
-    <rect x="92" y="57" width="105" height="100" rx="12"
-          fill="#071B4D" stroke="#FFFFFF" stroke-width="7"/>
-    <path d="M116 87h58M116 110h58M116 133h42"
-          stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
-    <rect x="111" y="202" width="112" height="103" rx="12"
-          fill="#071B4D" stroke="#FFFFFF" stroke-width="7"/>
-    <circle cx="133" cy="228" r="7" fill="#19D3F3"/>
-    <circle cx="133" cy="253" r="7" fill="#247BFF"/>
-    <circle cx="133" cy="278" r="7" fill="#5148E8"/>
-    <path d="M151 228h47M151 253h47M151 278h47"
-          stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
-    <path d="M183 153h58l-20-18m20 18-20 18"
-          fill="none" stroke="#19D3F3" stroke-width="10"
-          stroke-linecap="round" stroke-linejoin="round"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#EC008C"/>
+  <!-- Bridge towers -->
+  <rect x="19" y="16" width="4" height="26" rx="1" fill="#fff"/>
+  <rect x="41" y="16" width="4" height="26" rx="1" fill="#fff"/>
+  <!-- Main suspension cable -->
+  <path d="M8 26 Q21 16 21 16 Q32 24 43 16 Q43 16 56 26"
+        fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Hangers -->
+  <line x1="13" y1="22" x2="13" y2="32" stroke="rgba(255,255,255,0.6)" stroke-width="1.2"/>
+  <line x1="27" y1="18" x2="27" y2="32" stroke="rgba(255,255,255,0.6)" stroke-width="1.2"/>
+  <line x1="32" y1="20" x2="32" y2="32" stroke="rgba(255,255,255,0.6)" stroke-width="1.2"/>
+  <line x1="37" y1="18" x2="37" y2="32" stroke="rgba(255,255,255,0.6)" stroke-width="1.2"/>
+  <line x1="51" y1="22" x2="51" y2="32" stroke="rgba(255,255,255,0.6)" stroke-width="1.2"/>
+  <!-- Bridge deck -->
+  <path d="M8 34 Q32 30 56 34" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  <!-- Water baseline -->
+  <rect x="8" y="44" width="48" height="2" rx="1" fill="rgba(255,255,255,0.35)"/>
 </svg>

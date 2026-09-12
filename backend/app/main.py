@@ -1,6 +1,7 @@
 """Setu — application entry point.
 
-The database schema is owned by db/setu_postgres.sql, not by SQLAlchemy.
+The database schema is owned by the SQL files in db/migrations/, not by
+SQLAlchemy.
 Nothing is created at startup on purpose: `create_all` would build tables
 without the CHECK constraints, cascades and indexes the script defines, and the
 two would drift apart silently. Instead the app checks the schema is there and
@@ -59,9 +60,11 @@ def _check_database() -> None:
             f"{len(missing)} table(s): {', '.join(sorted(missing))}\n\n"
             "  Load it with:\n\n"
             "    psql -h 127.0.0.1 -p 5432 -U postgres -d setu "
-            "-f db/setu_postgres.sql\n\n"
+            "-f db/migrations/V1__initial_schema.sql\n\n"
             "  That script creates every table and inserts the sample data. "
-            "See db/POSTGRES.md.\n",
+            "Apply db/migrations/V2__*.sql onward after it, in order -- or "
+            "run `flyway migrate` to do all of this automatically. See "
+            "db/POSTGRES.md.\n",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -73,7 +76,9 @@ def _check_database() -> None:
             "is missing.\n\n"
             "  Upgrade it in place (keeps your data) with:\n\n"
             "    psql -h 127.0.0.1 -p 5432 -d setu "
-            "-f db/migrations/001_business_plans_in_chat.sql\n",
+            "-f db/migrations/V2__business_plans_in_chat.sql\n\n"
+            "  Or run `flyway migrate` to apply this and any later "
+            "migrations automatically.\n",
             file=sys.stderr,
         )
         raise SystemExit(1)

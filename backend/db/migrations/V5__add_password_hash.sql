@@ -4,7 +4,7 @@
 --
 -- Apply with:
 --   psql -h 127.0.0.1 -p 5432 -U postgres -d setu \
---        -f db/migrations/004_add_password_hash.sql
+--        -f db/migrations/V5__add_password_hash.sql
 
 BEGIN;
 

@@ -5,7 +5,7 @@
 -- sample data the SQLite build seeds itself with.
 --
 --   createdb setu
---   psql -U setu -d setu -f setu_postgres.sql
+--   psql -U setu -d setu -f db/migrations/V1__initial_schema.sql
 --
 -- Running this twice is safe: it drops the Setu tables first. It touches
 -- nothing else in the database.

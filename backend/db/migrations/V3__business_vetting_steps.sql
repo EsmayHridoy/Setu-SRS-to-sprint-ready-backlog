@@ -6,10 +6,10 @@
 -- kept as-is and still populated (derived from the new fields) so nothing
 -- that reads them breaks.
 --
--- A fresh setu_postgres.sql already includes all of this. Run this only
+-- A fresh db/migrations/V1__initial_schema.sql already includes all of this. Run this only
 -- against a database created before it, to keep its data:
 --
---   psql -h 127.0.0.1 -p 5432 -d setu -f db/migrations/002_business_vetting_steps.sql
+--   psql -h 127.0.0.1 -p 5432 -d setu -f db/migrations/V3__business_vetting_steps.sql
 --
 -- Safe to run twice.
 -- =====================================================================
