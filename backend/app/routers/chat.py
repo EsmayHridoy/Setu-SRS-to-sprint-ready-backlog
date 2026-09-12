@@ -198,6 +198,7 @@ async def send_message(conversation_id: str, payload: NewMessage,
             content = await chat_agent.answer(
                 conversation.project.name, question,
                 project_id=conversation.project_id, user_id=user.id,
+                conversation_id=conversation.id,
                 history=history, created_plan_ids=created_plan_ids,
             )
         except RuntimeError as exc:
@@ -295,8 +296,8 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             try:
                 async for kind, text in chat_agent.answer_stream(
                     project_name, question, project_id=project_id,
-                    user_id=user_id, history=history,
-                    created_plan_ids=created_plan_ids,
+                    user_id=user_id, conversation_id=conversation_id,
+                    history=history, created_plan_ids=created_plan_ids,
                 ):
                     if kind == adk_runner.FINAL:
                         final_text = text
@@ -434,6 +435,7 @@ def _plan_reply_stream(conversation: Conversation, user_message: Message,
                                  f"from {filename}: {exc}")
             else:
                 plan = BusinessPlan(project_id=conv.project_id, user_id=user_id,
+                                    conversation_id=conv.id,
                                     source_filename=filename)
                 session.add(plan)
                 session.flush()

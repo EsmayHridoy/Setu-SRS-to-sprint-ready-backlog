@@ -26,6 +26,7 @@ export default function App() {
 
   const threadEndRef = useRef(null);
   const abortRef = useRef(null);
+  const streamingRef = useRef(false);
 
   // On mount, try to restore session from a stored token.
   useEffect(() => {
@@ -76,6 +77,7 @@ export default function App() {
   }
 
   async function openConversation(id) {
+    stopStreaming();
     setError('');
     try {
       const detail = await api.getConversation(id);
@@ -119,26 +121,30 @@ export default function App() {
   }
 
   async function doStream(convId, text, att) {
-    const tempUserId = `tmp-u-${Date.now()}`;
-    const tempReplyId = `tmp-a-${Date.now()}`;
+    const tempUserId = `tmp-u-${crypto.randomUUID()}`;
+    const tempReplyId = `tmp-a-${crypto.randomUUID()}`;
     const userContent = att
       ? `[Uploaded document: ${att.filename}]${text ? `\n\n${text}` : ''}`
       : text;
 
     setError('');
+    streamingRef.current = true;
     setStreaming(true);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setActiveConversation((prev) => ({
-      ...prev,
-      messages: [
-        ...(prev.messages || []),
-        { id: tempUserId, role: 'USER', content: userContent, citations: [] },
-        { id: tempReplyId, role: 'ASSISTANT', content: '', citations: [], streaming: true },
-      ],
-    }));
+    setActiveConversation((prev) => {
+      if (!prev || prev.id !== convId) return prev;
+      return {
+        ...prev,
+        messages: [
+          ...(prev.messages || []),
+          { id: tempUserId, role: 'USER', content: userContent, citations: [] },
+          { id: tempReplyId, role: 'ASSISTANT', content: '', citations: [], streaming: true },
+        ],
+      };
+    });
 
     const patch = (id, fn) =>
       setActiveConversation((prev) => {
@@ -184,13 +190,14 @@ export default function App() {
       }
     } finally {
       abortRef.current = null;
+      streamingRef.current = false;
       setStreaming(false);
     }
   }
 
   async function sendMessage(e) {
     e.preventDefault();
-    if (!activeConversation || streaming) return;
+    if (!activeConversation || streamingRef.current) return;
     const typed = messageText.trim();
     const att = attachment;
     if (!typed && !att) return;

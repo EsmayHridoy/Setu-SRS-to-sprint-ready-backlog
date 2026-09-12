@@ -29,12 +29,16 @@ APP_NAME = "setu-chat-agent"
 
 
 def _build_business_items_tools(project_id: str, user_id: str,
+                                conversation_id: str,
                                 created_plan_ids: list[str],
                                 ) -> list[FunctionTool]:
     """The two local (non-MCP) tools the chat agent uses against this app's
-    own database, both scoped to `project_id` by closure -- never a
+    own database, both scoped to `conversation_id` by closure -- never a
     model-supplied argument, so the agent cannot widen its own reach to
-    another project.
+    another chat, even within the same project. A vetting request in one
+    chat must never read as though it "already knows" about an item that
+    was only ever discussed in a different chat -- each conversation's view
+    of the project's business items is independent (see V9 migration).
 
     `created_plan_ids` is an output parameter: `create_business_item`
     appends to it as a side effect, since a FunctionTool's return value
@@ -51,14 +55,17 @@ def _build_business_items_tools(project_id: str, user_id: str,
         return asyncio.to_thread(fn)
 
     async def list_known_business_requirements() -> list[dict]:
-        """List every business requirement already tracked for this
-        project -- each with its current status and, if vetted, the
+        """List every business requirement already tracked in THIS chat
+        conversation -- each with its current status and, if vetted, the
         verdict -- so a question or a vetting request can be answered from
         the existing record instead of redoing work already done.
 
-        Excludes items whose plan was discarded (the BA chose not to
-        pursue that document, so those items should be treated as if they
-        never existed). Capped and newest-first so the list stays small.
+        Never includes items from a different chat, or from a document
+        uploaded directly on the Business tab -- only what this
+        conversation itself extracted or logged. Excludes items whose plan
+        was discarded (the BA chose not to pursue that document, so those
+        items should be treated as if they never existed). Capped and
+        newest-first so the list stays small.
         """
         def _run() -> list[dict]:
             db = SessionLocal()
@@ -66,7 +73,7 @@ def _build_business_items_tools(project_id: str, user_id: str,
                 rows = (
                     db.query(BusinessItem)
                     .join(BusinessPlan, BusinessItem.plan_id == BusinessPlan.id)
-                    .filter(BusinessPlan.project_id == project_id)
+                    .filter(BusinessPlan.conversation_id == conversation_id)
                     .filter(BusinessPlan.status != "DISCARDED")
                     .order_by(BusinessPlan.created_at.desc())
                     .limit(200)
@@ -101,6 +108,7 @@ def _build_business_items_tools(project_id: str, user_id: str,
             db = SessionLocal()
             try:
                 plan = BusinessPlan(project_id=project_id, user_id=user_id,
+                                    conversation_id=conversation_id,
                                     source_filename="(from chat)")
                 db.add(plan)
                 db.flush()
@@ -221,7 +229,7 @@ _INSTRUCTION_TEMPLATE = (
 
 
 def _build_agent(project_name: str, project_id: str, user_id: str,
-                 created_plan_ids: list[str],
+                 conversation_id: str, created_plan_ids: list[str],
                  ) -> tuple[LlmAgent, McpToolset]:
     github_mcp.require_configured()
     toolset = github_mcp.build_toolset()
@@ -234,14 +242,14 @@ def _build_agent(project_name: str, project_id: str, user_id: str,
             procedure=github_mcp.investigation_procedure(),
         ),
         tools=[toolset, *_build_business_items_tools(
-            project_id, user_id, created_plan_ids)],
+            project_id, user_id, conversation_id, created_plan_ids)],
         generate_content_config=build_generate_config(show_thinking=True),
     )
     return agent, toolset
 
 
 async def answer(project_name: str, question: str, *, project_id: str,
-                 user_id: str, history: str = "",
+                 user_id: str, conversation_id: str, history: str = "",
                  created_plan_ids: list[str] | None = None) -> str:
     """`history` is the conversation so far from chat_memory.build_history().
 
@@ -251,7 +259,7 @@ async def answer(project_name: str, question: str, *, project_id: str,
     same way an uploaded document's reply is linked.
     """
     agent, toolset = _build_agent(
-        project_name, project_id, user_id,
+        project_name, project_id, user_id, conversation_id,
         created_plan_ids if created_plan_ids is not None else [],
     )
     try:
@@ -265,14 +273,14 @@ async def answer(project_name: str, question: str, *, project_id: str,
 
 
 async def answer_stream(project_name: str, question: str, *, project_id: str,
-                        user_id: str, history: str = "",
+                        user_id: str, conversation_id: str, history: str = "",
                         created_plan_ids: list[str] | None = None,
                         ) -> AsyncIterator[tuple[str, str]]:
     """(kind, text) pairs from adk_runner.stream_single_turn: STATUS progress
     lines, DELTA pieces of the answer, then the FINAL answer. See answer()
     for `created_plan_ids`."""
     agent, toolset = _build_agent(
-        project_name, project_id, user_id,
+        project_name, project_id, user_id, conversation_id,
         created_plan_ids if created_plan_ids is not None else [],
     )
     try:

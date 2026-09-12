@@ -208,6 +208,13 @@ class BusinessPlan(Base):
         String(36), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    # The chat this plan was created from, if any -- NULL for a plan created
+    # via the Business tab's direct document upload. Lets the chat agent's
+    # business-requirements lookup stay scoped to one conversation instead
+    # of leaking another chat's items into this one (see V9 migration).
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("conversations.id", ondelete="SET NULL"),
+        index=True, default=None)
     source_filename: Mapped[str] = mapped_column(String(300), default="")
     status: Mapped[str] = mapped_column(String(20), default="DRAFT")  # DRAFT | CONFIRMED | DONE | DISCARDED
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
