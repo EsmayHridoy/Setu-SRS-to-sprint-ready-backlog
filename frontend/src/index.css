@@ -1664,9 +1664,10 @@ select:focus {
 
 .vet-no {
   flex-shrink: 0;
-  width: 22px;
+  min-width: 22px;
   height: 22px;
-  border-radius: 50%;
+  padding: 0 6px;
+  border-radius: 999px;
   background: var(--bg-hover);
   color: var(--text-muted);
   font-size: 12px;
@@ -1730,10 +1731,118 @@ select:focus {
   white-space: pre-wrap;
 }
 
+.vet-notes-list {
+  margin: 2px 0 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.vet-notes-list li {
+  margin: 2px 0;
+  white-space: pre-wrap;
+}
+
 .vet-error {
   margin: 8px 0 0 32px;
   font-size: 13px;
   color: var(--danger);
+}
+
+.pill.approval.approved {
+  background: rgba(28, 122, 69, 0.12);
+  color: #1c7a45;
+}
+
+.pill.approval.pending {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.pill.changed {
+  margin-left: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+/* ----------------- item discussion (comment + approve) ----------------- */
+.item-discussion {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.item-discussion-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.item-thread {
+  margin-top: 10px;
+}
+
+.item-thread-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.item-thread-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.item-comment {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+
+.item-comment.user {
+  background: var(--bg-user-bubble);
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.item-comment-role {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.item-comment p {
+  margin: 0;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.item-thread-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.item-thread-input textarea {
+  flex: 1;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.item-thread-locked {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 /* ----------------- SRS step (after a plan is vetted) ----------------- */

@@ -276,7 +276,38 @@ class BusinessItem(Base):
     error_message: Mapped[str] = mapped_column(Text, default="")
     vetted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # A DONE item has a verdict; an approved one has a BA's sign-off on it.
+    # Only approved items are backlog-ready -- the two are deliberately
+    # separate so a BA can discuss and revise a verdict before committing to
+    # it, without that discussion looking like it happened after the fact.
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+
     plan = relationship("BusinessPlan", back_populates="items")
+    comments = relationship("BusinessItemComment", back_populates="item",
+                            cascade="all, delete-orphan",
+                            order_by="BusinessItemComment.created_at")
+
+
+class BusinessItemComment(Base):
+    """One turn in the discussion under a vetted item.
+
+    Kept even after the item is approved, as the record of what discussion
+    led to the final verdict -- the same reasoning db/models.py already
+    applies to keeping a discarded BusinessPlan instead of deleting it.
+    """
+    __tablename__ = "business_item_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    business_item_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("business_items.id", ondelete="CASCADE"),
+        index=True)
+    role: Mapped[str] = mapped_column(String(16))  # USER | ASSISTANT
+    content: Mapped[str] = mapped_column(Text)
+    # Set on an ASSISTANT row that revised the item's verdict fields.
+    changed_verdict: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    item = relationship("BusinessItem", back_populates="comments")
 
 
 class SrsDocument(Base):

@@ -163,12 +163,92 @@ _VETTING_INSTRUCTION_TEMPLATE = (
 )
 
 
+_DISCUSSION_INSTRUCTION_TEMPLATE = (
+    "You are continuing a discussion with a Business Analyst about ONE "
+    "business requirement that has already been vetted once. Here is the "
+    "requirement and its current, already-recorded verdict:\n\n"
+    "Requirement: {description}\n\n"
+    "Current verdict fields:\n{current_fields}\n\n"
+    "The BA's newest message is either a clarifying question about this "
+    "verdict, or new information/an argument that should change it. Decide "
+    "which, and respond accordingly:\n"
+    "- Clarifying question (e.g. \"why do you say that\", \"what do you mean "
+    "by X\") -- answer it in `reply` using what you already know above. Do "
+    "NOT investigate the repository again for this; copy every verdict "
+    "field below EXACTLY as given above, unchanged, and set `changed` to "
+    "false.\n"
+    "- New information, a correction, or an argument that would genuinely "
+    "change the verdict (e.g. \"we will build the new infrastructure, so it "
+    "should be feasible\") -- investigate the repository again only if this "
+    "raises something not already covered above, then revise whichever "
+    "fields actually need to change and explain the revision in `reply`. "
+    "Set `changed` to true only in this case.\n\n"
+    "{repo_hint}\n\n{procedure}\n\n"
+    "`reply` -- a short, conversational response to the BA's comment, in "
+    "plain business language, explaining your reasoning either way. Never "
+    "put file paths, class or function names, or database table/column "
+    "names in it.\n\n"
+    "`changed` -- true only if this turn revised one or more of the "
+    "verdict fields below.\n\n"
+    "The remaining fields are the same BRAC IT Change Request vocabulary as "
+    "the original vetting -- `is_requirement_clear`, `is_feasible`, "
+    "`already_supported`, `user_story`, `actors`, `pre_condition`, "
+    "`impacted_areas`, `requirements`, `acceptance_criteria`, `exceptions`, "
+    "`verdict`. Always return the full, current-best value of every one of "
+    "them, whether or not this turn changed it -- never leave one blank.\n\n"
+    "The message may open with the discussion so far -- earlier turns on "
+    "this same item. Use it for context; answer only the newest comment, "
+    "under 'Current message'."
+)
+
+_CURRENT_FIELD_LABELS = (
+    ("is_requirement_clear", "Requirement clear"),
+    ("is_feasible", "Feasible"),
+    ("already_supported", "Already supported"),
+    ("user_story", "User Story"),
+    ("actors", "Actors"),
+    ("pre_condition", "Pre-condition"),
+    ("impacted_areas", "Impacted Areas"),
+    ("requirements", "Requirements"),
+    ("acceptance_criteria", "Acceptance Criteria"),
+    ("exceptions", "Exceptions"),
+    ("verdict", "Verdict"),
+)
+
+
+def _format_current_fields(current: dict) -> str:
+    """The item's current verdict fields as a labelled text block, so the
+    discussion agent can quote or revise them without re-deriving anything
+    it does not need to."""
+    lines = []
+    for key, label in _CURRENT_FIELD_LABELS:
+        value = current.get(key)
+        lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
+
 class ExtractedBusiness(BaseModel):
     description: str
     location: str
 
 
 class BusinessVetting(BaseModel):
+    is_requirement_clear: bool
+    is_feasible: bool
+    already_supported: bool
+    user_story: str
+    actors: str
+    pre_condition: str
+    impacted_areas: str
+    requirements: str
+    acceptance_criteria: str
+    exceptions: str
+    verdict: str
+
+
+class ItemDiscussionResult(BaseModel):
+    reply: str
+    changed: bool
     is_requirement_clear: bool
     is_feasible: bool
     already_supported: bool
@@ -271,3 +351,52 @@ async def vet_business_stream(description: str, *, user_id: str,
             "output."
         )
     yield RESULT, BusinessVetting.model_validate(parsed)
+
+
+async def discuss_item_stream(description: str, current: dict, *, comment: str,
+                              history: str = "", user_id: str,
+                              ) -> AsyncIterator[tuple[str, str | ItemDiscussionResult]]:
+    """One turn of a BA's discussion under an already-vetted item.
+
+    `current` is the item's present verdict fields (a dict with the same
+    keys as BusinessVetting) -- given up front so a plain clarifying
+    question can be answered without a repository round-trip. `history` is
+    the thread's earlier turns, from chat_memory.build_history(). Yields
+    STATUS lines then (RESULT, ItemDiscussionResult).
+    """
+    github_mcp.require_configured()
+
+    toolset = github_mcp.build_toolset()
+    agent = LlmAgent(
+        model=build_model(),
+        name="business_item_discussant",
+        instruction=_DISCUSSION_INSTRUCTION_TEMPLATE.format(
+            description=description,
+            current_fields=_format_current_fields(current),
+            repo_hint=github_mcp.repo_hint(),
+            procedure=github_mcp.investigation_procedure(),
+        ),
+        tools=[toolset],
+        output_schema=ItemDiscussionResult,
+        generate_content_config=build_generate_config(show_thinking=True),
+    )
+    final_text = ""
+    try:
+        async for kind, text in iter_turn(
+            agent, with_history(history, comment),
+            app_name=APP_NAME, user_id=user_id,
+        ):
+            if kind == STATUS:
+                yield STATUS, text
+            elif kind == FINAL:
+                final_text = text
+    finally:
+        await github_mcp.close_toolset(toolset)
+
+    parsed = parse_json(final_text, "item discussion")
+    if parsed is None:
+        raise RuntimeError(
+            "The discussion agent's response could not be parsed as "
+            "structured output."
+        )
+    yield RESULT, ItemDiscussionResult.model_validate(parsed)

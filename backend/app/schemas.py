@@ -230,6 +230,30 @@ class BusinessItemOut(ORM):
     error_message: str
     vetted_at: datetime | None = None
 
+    # DONE means "has a verdict"; approved means "a BA signed off on it".
+    is_approved: bool = False
+
+
+class BusinessItemCommentOut(ORM):
+    id: str
+    role: str  # USER | ASSISTANT
+    content: str
+    changed_verdict: bool = False
+    created_at: datetime
+
+
+class BusinessItemCommentIn(BaseModel):
+    content: str = Field(min_length=1, max_length=2_000)
+
+
+class BusinessItemCommentReply(BaseModel):
+    """What posting a comment returns: the comment itself, the agent's
+    reply, and the item as it stands after this turn (unchanged unless the
+    reply revised the verdict)."""
+    comment: BusinessItemCommentOut
+    reply: BusinessItemCommentOut
+    item: BusinessItemOut
+
 
 class SrsPlacementOut(BaseModel):
     """Where one vetted story was written in the user's SRS format."""

@@ -256,6 +256,22 @@ export const api = {
       request(`/api/business-plans/${id}/srs/regenerate`, { method: 'POST' }),
     downloadSrs: (id) =>
       download(`/api/business-plans/${id}/srs/download`, 'srs.docx'),
+
+    // Discussion under one vetted item: a clarifying question gets a
+    // conversational answer; new information can revise the verdict in
+    // place. Approving is the BA's own explicit sign-off -- separate from
+    // vetting itself, and required before an item is backlog-ready.
+    getItemComments: (planId, itemId) =>
+      request(`/api/business-plans/${planId}/items/${itemId}/comments`),
+    postItemComment: (planId, itemId, content) =>
+      request(`/api/business-plans/${planId}/items/${itemId}/comments`, {
+        method: 'POST',
+        body: { content },
+      }),
+    approveItem: (planId, itemId) =>
+      request(`/api/business-plans/${planId}/items/${itemId}/approve`, {
+        method: 'POST',
+      }),
   },
 
   // Admin

@@ -28,16 +28,28 @@ from .models import BusinessItem, BusinessPlan
 APP_NAME = "setu-chat-agent"
 
 
-def _build_business_items_tool(project_id: str) -> FunctionTool:
-    """A read-only lookup the chat agent uses to check whether a topic was
-    already extracted and/or vetted for this project, before treating it as
-    new. `project_id` is fixed by closure, never a model-supplied argument --
-    the agent cannot widen its own scope to another project's items.
+def _build_business_items_tools(project_id: str, user_id: str,
+                                created_plan_ids: list[str],
+                                ) -> list[FunctionTool]:
+    """The two local (non-MCP) tools the chat agent uses against this app's
+    own database, both scoped to `project_id` by closure -- never a
+    model-supplied argument, so the agent cannot widen its own reach to
+    another project.
 
-    Runs the actual query in a worker thread: SessionLocal is a plain
-    (non-async) SQLAlchemy session, and this function runs inside the same
-    event loop the rest of the turn awaits on.
+    `created_plan_ids` is an output parameter: `create_business_item`
+    appends to it as a side effect, since a FunctionTool's return value
+    only reaches the model, not the caller of answer()/answer_stream(). The
+    router reads it back afterwards to link the chat reply to the new plan
+    the same way an uploaded document's reply is (see
+    app/routers/chat.py's _plan_reply_stream), so it renders as the same
+    editable draft-plan card in the thread.
     """
+    def _query(fn):
+        """Run a synchronous SQLAlchemy closure in a worker thread -- these
+        tools run inside the same event loop the rest of the turn awaits on,
+        and SessionLocal is a plain, non-async session."""
+        return asyncio.to_thread(fn)
+
     async def list_known_business_requirements() -> list[dict]:
         """List every business requirement already tracked for this
         project -- each with its current status and, if vetted, the
@@ -48,7 +60,7 @@ def _build_business_items_tool(project_id: str) -> FunctionTool:
         pursue that document, so those items should be treated as if they
         never existed). Capped and newest-first so the list stays small.
         """
-        def _query() -> list[dict]:
+        def _run() -> list[dict]:
             db = SessionLocal()
             try:
                 rows = (
@@ -71,9 +83,41 @@ def _build_business_items_tool(project_id: str) -> FunctionTool:
                 ]
             finally:
                 db.close()
-        return await asyncio.to_thread(_query)
+        return await _query(_run)
 
-    return FunctionTool(list_known_business_requirements)
+    async def create_business_item(description: str) -> dict:
+        """Log a new business requirement for this project as a draft,
+        PENDING item, ready for the Business Analyst to review and vet.
+
+        Call this ONLY when the user has explicitly asked you to vet
+        something (not just asked a feasibility question) AND your
+        business-requirements lookup found no existing match for it.
+        Never call this for a plain question, and never call it twice for
+        the same requirement in one message. `description` must be a
+        clear, well-formed statement of the requirement in your own
+        words -- not the user's raw, casual phrasing.
+        """
+        def _run() -> str:
+            db = SessionLocal()
+            try:
+                plan = BusinessPlan(project_id=project_id, user_id=user_id,
+                                    source_filename="(from chat)")
+                db.add(plan)
+                db.flush()
+                db.add(BusinessItem(plan_id=plan.id, seq_no=1,
+                                    description=description.strip()))
+                db.commit()
+                return plan.id
+            finally:
+                db.close()
+        plan_id = await _query(_run)
+        created_plan_ids.append(plan_id)
+        return {"logged": True}
+
+    return [
+        FunctionTool(list_known_business_requirements),
+        FunctionTool(create_business_item),
+    ]
 
 
 _INSTRUCTION_TEMPLATE = (
@@ -116,8 +160,10 @@ _INSTRUCTION_TEMPLATE = (
     "re-investigate. For case 2, just relay that item's existing verdict "
     "and reasoning in plain conversational language. For case 3, tell the "
     "user it has already been vetted, briefly state the verdict, and ask "
-    "whether they want it re-vetted -- if so, that still has to go through "
-    "the Business tab, the same as any vetting.\n"
+    "whether they want it re-vetted -- if so, tell them to open that item "
+    "on the Business tab and add a comment there explaining what should "
+    "change; that re-vets it in place, no re-upload needed. You still "
+    "cannot revise the verdict yourself, in chat, under any circumstance.\n"
     "- MATCH, still pending (vetting_status PENDING): for case 2, say it "
     "has already been submitted and is awaiting vetting, and share the "
     "requirement text so they know what's already logged. For case 3, tell "
@@ -128,10 +174,12 @@ _INSTRUCTION_TEMPLATE = (
     "as normal -- informal analysis, not a formal record. If it's clear the "
     "user wants an official record for the backlog, add one short line "
     "pointing them to the Business tab -- a footnote, never a reason to "
-    "withhold your own analysis. For case 3, you cannot perform vetting "
-    "yourself -- tell them plainly that actual vetting happens only "
-    "through the Business tab (upload it there as a document) and that is "
-    "how they get an official verdict.\n\n"
+    "withhold your own analysis. For case 3, you cannot vet it yourself, "
+    "but you CAN log it: call create_business_item with a clean, "
+    "well-written statement of the requirement, then tell the user you've "
+    "added it to the Business tab for review -- it will go through the "
+    "same review and vetting as anything uploaded there. Never call "
+    "create_business_item for a case 2 message, only case 3.\n\n"
     "Never apply case 2/3 handling to a case 1a/1b message -- an off-topic "
     "question does not get investigated or answered just because it sounds "
     "detailed or technical.\n\n"
@@ -172,7 +220,9 @@ _INSTRUCTION_TEMPLATE = (
 )
 
 
-def _build_agent(project_name: str, project_id: str) -> tuple[LlmAgent, McpToolset]:
+def _build_agent(project_name: str, project_id: str, user_id: str,
+                 created_plan_ids: list[str],
+                 ) -> tuple[LlmAgent, McpToolset]:
     github_mcp.require_configured()
     toolset = github_mcp.build_toolset()
     agent = LlmAgent(
@@ -183,16 +233,27 @@ def _build_agent(project_name: str, project_id: str) -> tuple[LlmAgent, McpTools
             repo_hint=github_mcp.repo_hint(),
             procedure=github_mcp.investigation_procedure(),
         ),
-        tools=[toolset, _build_business_items_tool(project_id)],
+        tools=[toolset, *_build_business_items_tools(
+            project_id, user_id, created_plan_ids)],
         generate_content_config=build_generate_config(show_thinking=True),
     )
     return agent, toolset
 
 
 async def answer(project_name: str, question: str, *, project_id: str,
-                 user_id: str, history: str = "") -> str:
-    """`history` is the conversation so far from chat_memory.build_history()."""
-    agent, toolset = _build_agent(project_name, project_id)
+                 user_id: str, history: str = "",
+                 created_plan_ids: list[str] | None = None) -> str:
+    """`history` is the conversation so far from chat_memory.build_history().
+
+    `created_plan_ids` is an optional output list: if the agent logs a new
+    business item this turn (see _build_business_items_tools), its plan id
+    is appended to it, so the caller can link the reply to that plan the
+    same way an uploaded document's reply is linked.
+    """
+    agent, toolset = _build_agent(
+        project_name, project_id, user_id,
+        created_plan_ids if created_plan_ids is not None else [],
+    )
     try:
         text = await run_single_turn(
             agent, with_history(history, question),
@@ -204,11 +265,16 @@ async def answer(project_name: str, question: str, *, project_id: str,
 
 
 async def answer_stream(project_name: str, question: str, *, project_id: str,
-                        user_id: str,
-                        history: str = "") -> AsyncIterator[tuple[str, str]]:
+                        user_id: str, history: str = "",
+                        created_plan_ids: list[str] | None = None,
+                        ) -> AsyncIterator[tuple[str, str]]:
     """(kind, text) pairs from adk_runner.stream_single_turn: STATUS progress
-    lines, DELTA pieces of the answer, then the FINAL answer."""
-    agent, toolset = _build_agent(project_name, project_id)
+    lines, DELTA pieces of the answer, then the FINAL answer. See answer()
+    for `created_plan_ids`."""
+    agent, toolset = _build_agent(
+        project_name, project_id, user_id,
+        created_plan_ids if created_plan_ids is not None else [],
+    )
     try:
         async for kind, text in stream_single_turn(
             agent, with_history(history, question),

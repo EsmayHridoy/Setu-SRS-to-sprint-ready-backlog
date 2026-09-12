@@ -20,6 +20,7 @@ precomputing everything up front instead).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from urllib.parse import quote
@@ -34,13 +35,19 @@ from .. import (
     business_agent, chat_memory, extraction, github_mcp, srs_agent, srs_docx,
 )
 from ..db import SessionLocal, get_db
-from ..models import BusinessItem, BusinessPlan, Message, SrsDocument, User
+from ..models import (
+    BusinessItem, BusinessItemComment, BusinessPlan, Message, SrsDocument,
+    User,
+)
 from ..schemas import (
+    BusinessItemCommentIn, BusinessItemCommentOut, BusinessItemCommentReply,
     BusinessItemDescriptionIn, BusinessItemOut, BusinessPlanDetail,
     BusinessPlanItemsIn, BusinessPlanOut, SrsDocumentOut,
 )
 from ..security import authorised_project, current_user, projects_for_user
 from ..sse import SSE_HEADERS, sse_event
+
+log = logging.getLogger("setu")
 
 router = APIRouter(prefix="/api/business-plans", tags=["business-plans"])
 
@@ -304,6 +311,189 @@ def vet_stream(plan_id: str, user: User = Depends(current_user),
                              headers=SSE_HEADERS)
 
 
+# --- item discussion and approval ---------------------------------------------
+#
+# A vetted item's DONE status means "has a verdict", not "final". The BA can
+# discuss it here -- asking a clarifying question, or giving new information
+# that should revise the verdict -- then explicitly approve it once
+# satisfied. Only an approved item is backlog-ready (see _stories() below,
+# which only includes approved items in a generated SRS).
+
+# Kept far smaller than a chat turn's or a whole plan's: this is one item's
+# own back-and-forth, not the project's history.
+DISCUSSION_HISTORY_CHARS = 6_000
+
+
+def _accessible_item(db: Session, plan_id: str, item_id: str,
+                     user: User) -> tuple[BusinessPlan, BusinessItem]:
+    plan = _accessible_plan(db, plan_id, user)
+    item = db.get(BusinessItem, item_id)
+    if item is None or item.plan_id != plan.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found.")
+    return plan, item
+
+
+def _require_vetted(item: BusinessItem) -> None:
+    if item.vetting_status != "DONE":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This business has not been vetted yet, so there is no verdict "
+            "to discuss or approve.",
+        )
+
+
+def _comment_history(comments: list[BusinessItemComment], *,
+                     budget: int = DISCUSSION_HISTORY_CHARS) -> str:
+    """The item's discussion so far as a "User: / Assistant:" transcript,
+    same shape as chat_memory.build_history() but for one item's own thread
+    rather than a conversation's messages."""
+    turns: list[str] = []
+    used = 0
+    for comment in comments:
+        label = "User" if comment.role == "USER" else "Assistant"
+        turn = f"{label}: {comment.content}"
+        used += len(turn)
+        if used > budget:
+            break
+        turns.append(turn)
+    return "\n\n".join(turns)
+
+
+def _vetting_dict(item: BusinessItem) -> dict:
+    return {
+        "is_requirement_clear": item.is_requirement_clear,
+        "is_feasible": item.is_feasible,
+        "already_supported": item.already_supported,
+        "user_story": item.user_story,
+        "actors": item.actors,
+        "pre_condition": item.pre_condition,
+        "impacted_areas": item.impacted_areas,
+        "requirements": item.requirements,
+        "acceptance_criteria": item.acceptance_criteria,
+        "exceptions": item.exceptions,
+        "verdict": item.verdict,
+    }
+
+
+@router.get("/{plan_id}/items/{item_id}/comments",
+           response_model=list[BusinessItemCommentOut])
+def list_item_comments(plan_id: str, item_id: str,
+                       user: User = Depends(current_user),
+                       db: Session = Depends(get_db)):
+    _, item = _accessible_item(db, plan_id, item_id, user)
+    return [BusinessItemCommentOut.model_validate(c) for c in item.comments]
+
+
+@router.post("/{plan_id}/items/{item_id}/comments",
+            response_model=BusinessItemCommentReply,
+            status_code=status.HTTP_201_CREATED)
+async def post_item_comment(plan_id: str, item_id: str,
+                            payload: BusinessItemCommentIn,
+                            user: User = Depends(current_user),
+                            db: Session = Depends(get_db)):
+    """Discuss an already-vetted item. The agent decides for itself whether
+    this is a clarifying question (answered from the existing verdict, no
+    repository round-trip) or new information that revises the verdict --
+    see business_agent.discuss_item_stream. Either way this never sets
+    is_approved: only the BA's own explicit approve call does that, so an
+    approved item can't quietly change under it via a stray comment.
+
+    Locked once approved: the BA's sign-off is meant to be the last word on
+    an item, not a state a follow-up comment can silently move past.
+    """
+    plan, item = _accessible_item(db, plan_id, item_id, user)
+    _require_vetted(item)
+    if item.is_approved:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This business is already approved. Its discussion is closed -- "
+            "there is nothing to re-vet once the BA has signed off.",
+        )
+
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Write a comment first.")
+
+    history = _comment_history(list(item.comments))
+    current = _vetting_dict(item)
+
+    result = None
+    try:
+        async for kind, value in business_agent.discuss_item_stream(
+            item.description, current, comment=content, history=history,
+            user_id=user.id,
+        ):
+            if kind == business_agent.RESULT:
+                result = value
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface a clean error, not a raw 500
+        log.warning("discuss_item_stream failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "The agent could not respond right now. Please try again.",
+        ) from exc
+    if result is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "The agent could not respond right now. Please try again.",
+        )
+
+    user_comment = BusinessItemComment(business_item_id=item.id, role="USER",
+                                       content=content)
+    db.add(user_comment)
+
+    if result.changed:
+        item.is_requirement_clear = result.is_requirement_clear
+        item.is_feasible = result.is_feasible
+        item.already_supported = result.already_supported
+        item.user_story = result.user_story
+        item.actors = result.actors
+        item.pre_condition = result.pre_condition
+        item.impacted_areas = result.impacted_areas
+        item.requirements = result.requirements
+        item.acceptance_criteria = result.acceptance_criteria
+        item.exceptions = result.exceptions
+        item.verdict = result.verdict
+        item.vetted_at = datetime.utcnow()
+
+    assistant_comment = BusinessItemComment(
+        business_item_id=item.id, role="ASSISTANT", content=result.reply,
+        changed_verdict=result.changed,
+    )
+    db.add(assistant_comment)
+
+    plan.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user_comment)
+    db.refresh(assistant_comment)
+    db.refresh(item)
+
+    return BusinessItemCommentReply(
+        comment=BusinessItemCommentOut.model_validate(user_comment),
+        reply=BusinessItemCommentOut.model_validate(assistant_comment),
+        item=BusinessItemOut.model_validate(item),
+    )
+
+
+@router.post("/{plan_id}/items/{item_id}/approve", response_model=BusinessItemOut)
+def approve_item(plan_id: str, item_id: str, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    """The BA's explicit sign-off on an item's current verdict. Idempotent --
+    approving an already-approved item just returns it unchanged, since a
+    double click or a retried request should not be an error.
+    """
+    plan, item = _accessible_item(db, plan_id, item_id, user)
+    _require_vetted(item)
+
+    if not item.is_approved:
+        item.is_approved = True
+        plan.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(item)
+    return BusinessItemOut.model_validate(item)
+
+
 # --- SRS generation ----------------------------------------------------------
 #
 # The step after a plan is vetted: the user may hand over their own SRS format
@@ -344,15 +534,17 @@ def _story_title(item: BusinessItem) -> str:
 
 
 def _stories(plan: BusinessPlan) -> list[srs_docx.Story]:
-    """The plan's successfully vetted items, in plan order.
+    """The plan's approved items, in plan order.
 
     Items that failed vetting are left out: an ERROR row has no story fields
     to write, and putting its raw description in the SRS would pass off
-    un-vetted text as specified.
+    un-vetted text as specified. A DONE-but-not-yet-approved item is left
+    out too -- it has a verdict, but the BA has not signed off on it, and an
+    SRS is meant to carry only backlog-ready stories.
     """
     stories = []
     for item in plan.items:
-        if item.vetting_status != "DONE":
+        if item.vetting_status != "DONE" or not item.is_approved:
             continue
         fields = tuple(
             (key, getattr(item, key) or "")
@@ -388,8 +580,9 @@ async def _generate(db: Session, plan: BusinessPlan, srs: SrsDocument,
     if not stories:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "None of this plan's businesses were vetted successfully, so "
-            "there is nothing to write into an SRS.",
+            "None of this plan's businesses are approved yet, so there is "
+            "nothing to write into an SRS. Vetting alone is not enough -- "
+            "approve each one you want included first.",
         )
 
     try:

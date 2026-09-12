@@ -846,9 +846,10 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
               : 'I could not find distinct business requirements in this document. Add them below, then confirm to vet them against the codebase.'}
           </p>
           <ol className="plan-edit-list">
-            {draft.map((it) => (
+            {draft.map((it, idx) => (
               <li key={it.key}>
                 <div className="plan-edit-body">
+                  <span className="vet-no">BR-{idx + 1}</span>
                   <textarea
                     rows={2}
                     value={it.description}
@@ -897,6 +898,7 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
             {plan.items.map((item) => (
               <VettedItem
                 key={item.id}
+                planId={planId}
                 item={item}
                 running={runningId === item.id}
                 step={runningId === item.id ? runningStep : ''}
@@ -905,6 +907,9 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
                 onEdit={() => setEditingId(item.id)}
                 onCancelEdit={() => setEditingId(null)}
                 onSave={(description) => savePendingItem(item.id, description)}
+                onItemUpdated={(updated) =>
+                  setPlan((p) => ({ ...p, items: p.items.map((i) => (i.id === updated.id ? updated : i)) }))
+                }
               />
             ))}
           </ol>
@@ -1123,6 +1128,35 @@ function SrsStep({ planId, srs, onSrs, onError, onGrow }) {
 
 const yesNo = (v) => (v == null ? '—' : v ? 'Yes' : 'No');
 
+// The model sometimes writes a numbered list ("1. Foo 2. Bar 3. Baz") as one
+// run-on sentence instead of one point per line, so white-space: pre-wrap
+// has no real newline to break on. Detect that shape from the punctuation
+// alone -- a digit, a dot, a space, repeated -- and split it back into
+// points regardless of whether the source had real line breaks.
+function splitNumberedList(text) {
+  if (!text) return null;
+  const parts = text
+    .split(/\s*(?=\d+\.\s)/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length < 2 || !parts.every((p) => /^\d+\.\s/.test(p))) return null;
+  return parts.map((p) => p.replace(/^\d+\.\s*/, ''));
+}
+
+function NotesBlock({ text }) {
+  const points = splitNumberedList(text);
+  if (points) {
+    return (
+      <ol className="vet-notes-list">
+        {points.map((p, i) => (
+          <li key={i}>{p}</li>
+        ))}
+      </ol>
+    );
+  }
+  return <p className="vet-notes">{text}</p>;
+}
+
 // Rewording a business that is still waiting to be vetted, while vetting is
 // paused. Resume then vets the new wording.
 function PendingItemEditor({ initial, onSave, onCancel }) {
@@ -1168,13 +1202,13 @@ function PendingItemEditor({ initial, onSave, onCancel }) {
   );
 }
 
-function VettedItem({ item, running, step, editable, editing, onEdit, onCancelEdit, onSave }) {
+function VettedItem({ planId, item, running, step, editable, editing, onEdit, onCancelEdit, onSave, onItemUpdated }) {
   const state = running ? 'running' : item.vetting_status.toLowerCase();
   const label = { running: 'Vetting…', pending: 'Waiting', done: 'Done', error: 'Failed' }[state];
   return (
     <li className={`vet-item ${state}`}>
       <div className="vet-head">
-        <span className="vet-no">{item.seq_no}</span>
+        <span className="vet-no">BR-{item.seq_no}</span>
         {editing ? (
           <PendingItemEditor initial={item.description} onSave={onSave} onCancel={onCancelEdit} />
         ) : (
@@ -1203,54 +1237,168 @@ function VettedItem({ item, running, step, editable, editing, onEdit, onCancelEd
             <span className="pill">Requirement clear: {yesNo(item.is_requirement_clear)}</span>
             <span className="pill">Feasible: {yesNo(item.is_feasible)}</span>
             <span className="pill">Already supported: {yesNo(item.already_supported)}</span>
+            <span className={`pill approval ${item.is_approved ? 'approved' : 'pending'}`}>
+              {item.is_approved ? 'Approved' : 'Awaiting approval'}
+            </span>
           </div>
 
           {item.user_story && (
             <>
               <div className="vet-label">User Story</div>
-              <p className="vet-notes">{item.user_story}</p>
+              <NotesBlock text={item.user_story} />
             </>
           )}
           {item.actors && (
             <>
               <div className="vet-label">Actors</div>
-              <p className="vet-notes">{item.actors}</p>
+              <NotesBlock text={item.actors} />
             </>
           )}
           {item.pre_condition && (
             <>
               <div className="vet-label">Pre-condition</div>
-              <p className="vet-notes">{item.pre_condition}</p>
+              <NotesBlock text={item.pre_condition} />
             </>
           )}
           {item.impacted_areas && (
             <>
               <div className="vet-label">Impacted Areas</div>
-              <p className="vet-notes">{item.impacted_areas}</p>
+              <NotesBlock text={item.impacted_areas} />
             </>
           )}
           {item.requirements && (
             <>
               <div className="vet-label">Requirements</div>
-              <p className="vet-notes">{item.requirements}</p>
+              <NotesBlock text={item.requirements} />
             </>
           )}
           {item.acceptance_criteria && (
             <>
               <div className="vet-label">Acceptance Criteria</div>
-              <p className="vet-notes">{item.acceptance_criteria}</p>
+              <NotesBlock text={item.acceptance_criteria} />
             </>
           )}
           {item.exceptions && (
             <>
               <div className="vet-label">Exceptions</div>
-              <p className="vet-notes">{item.exceptions}</p>
+              <NotesBlock text={item.exceptions} />
             </>
           )}
+
+          <ItemDiscussion planId={planId} item={item} onItemUpdated={onItemUpdated} />
         </div>
       )}
       {item.vetting_status === 'ERROR' && <p className="vet-error">{item.error_message}</p>}
     </li>
+  );
+}
+
+function ItemDiscussion({ planId, item, onItemUpdated }) {
+  const [open, setOpen] = useState(false);
+  const [comments, setComments] = useState(null); // null = not loaded yet
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [error, setError] = useState('');
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || comments !== null) return;
+    let cancelled = false;
+    api.business
+      .getItemComments(planId, item.id)
+      .then((rows) => {
+        if (!cancelled) setComments(rows);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, planId, item.id, comments]);
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [comments]);
+
+  async function send() {
+    const content = draft.trim();
+    if (!content || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      const result = await api.business.postItemComment(planId, item.id, content);
+      setComments((c) => [...(c || []), result.comment, result.reply]);
+      setDraft('');
+      onItemUpdated(result.item);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function approve() {
+    setApproving(true);
+    setError('');
+    try {
+      const updated = await api.business.approveItem(planId, item.id);
+      onItemUpdated(updated);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  return (
+    <div className="item-discussion">
+      <div className="item-discussion-actions">
+        <button type="button" className="ghost-btn" onClick={() => setOpen((o) => !o)}>
+          {open ? 'Hide discussion' : 'Discuss this'}
+        </button>
+        {!item.is_approved && (
+          <button type="button" className="save-btn" onClick={approve} disabled={approving}>
+            {approving ? 'Approving…' : 'Approve'}
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="item-thread">
+          <div className="item-thread-list" ref={listRef}>
+            {comments === null && !error && <p className="item-thread-empty">Loading…</p>}
+            {comments?.length === 0 && <p className="item-thread-empty">No discussion yet -- ask a question or give new information.</p>}
+            {comments?.map((c) => (
+              <div key={c.id} className={`item-comment ${c.role.toLowerCase()}`}>
+                <span className="item-comment-role">{c.role === 'USER' ? 'You' : 'Setu'}</span>
+                <p>{c.content}</p>
+                {c.changed_verdict && <span className="pill changed">Verdict updated</span>}
+              </div>
+            ))}
+          </div>
+
+          {item.is_approved ? (
+            <p className="item-thread-locked">Approved -- this discussion is now read-only.</p>
+          ) : (
+            <div className="item-thread-input">
+              <textarea
+                rows={2}
+                value={draft}
+                placeholder="Ask a question, or give new information that should change the verdict…"
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={sending}
+              />
+              <button type="button" className="save-btn" onClick={send} disabled={sending || !draft.trim()}>
+                {sending ? 'Thinking…' : 'Send'}
+              </button>
+            </div>
+          )}
+          {error && <p className="vet-error">{error}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 

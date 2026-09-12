@@ -132,12 +132,19 @@ def _persist_user_message(db: Session, conversation: Conversation,
 
 
 def _persist_reply(db: Session, conversation: Conversation, content: str, *,
-                   is_placeholder: bool, citations=()) -> Message:
+                   is_placeholder: bool, citations=(),
+                   business_plan_id: str | None = None) -> Message:
     """Persist the assistant's reply (with any citations) and bump the
     conversation's updated_at. Shared by the placeholder and real-agent paths.
+
+    `business_plan_id` links the reply to a plan the same way an uploaded
+    document's reply is (see _plan_reply_stream) -- set when chat_agent
+    logged a new business item this turn, so it renders as the same
+    editable draft-plan card instead of plain text.
     """
     reply = Message(conversation_id=conversation.id, role="ASSISTANT",
-                    content=content, is_placeholder=is_placeholder)
+                    content=content, is_placeholder=is_placeholder,
+                    business_plan_id=business_plan_id)
     db.add(reply)
     db.flush()
 
@@ -186,11 +193,12 @@ async def send_message(conversation_id: str, payload: NewMessage,
         # Read before this turn is saved, so the history is everything *but* it.
         history = chat_memory.build_history(conversation.messages)
         user_message = _persist_user_message(db, conversation, question)
+        created_plan_ids: list[str] = []
         try:
             content = await chat_agent.answer(
                 conversation.project.name, question,
                 project_id=conversation.project_id, user_id=user.id,
-                history=history,
+                history=history, created_plan_ids=created_plan_ids,
             )
         except RuntimeError as exc:
             raise HTTPException(503, str(exc)) from exc
@@ -199,7 +207,10 @@ async def send_message(conversation_id: str, payload: NewMessage,
             raise HTTPException(
                 503, "The agent could not answer right now. Please try again.",
             ) from exc
-        reply = _persist_reply(db, conversation, content, is_placeholder=False)
+        reply = _persist_reply(
+            db, conversation, content, is_placeholder=False,
+            business_plan_id=created_plan_ids[0] if created_plan_ids else None,
+        )
 
     return SendMessageResult(
         conversation=_out(conversation),
@@ -280,10 +291,12 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
             })
 
             final_text = ""
+            created_plan_ids: list[str] = []
             try:
                 async for kind, text in chat_agent.answer_stream(
                     project_name, question, project_id=project_id,
                     user_id=user_id, history=history,
+                    created_plan_ids=created_plan_ids,
                 ):
                     if kind == adk_runner.FINAL:
                         final_text = text
@@ -297,6 +310,8 @@ def _agent_reply_stream(conversation: Conversation, user_message: Message,
                 final_text = f"Something went wrong answering this question: {exc}"
 
             reply.content = final_text or "The agent returned no response."
+            if created_plan_ids:
+                reply.business_plan_id = created_plan_ids[0]
             conv.updated_at = datetime.utcnow()
             session.commit()
             session.refresh(reply)

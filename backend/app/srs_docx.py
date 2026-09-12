@@ -134,6 +134,13 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # going into is already a bulleted or numbered one.
 _LEADING_MARKER = re.compile(r"^\s*(?:[-*•·–—]|\(?\d+[.)]|[a-z][.)])\s+")
 
+# The vetting model sometimes writes a numbered list as one run-on sentence
+# ("1. Foo 2. Bar 3. Baz") instead of one point per line. Detected by the
+# numbering punctuation alone, so it splits back into points regardless of
+# whether the source ever had real line breaks.
+_INLINE_NUMBERED_SPLIT = re.compile(r"\s*(?=\d+\.\s)")
+_INLINE_NUMBERED_ITEM = re.compile(r"^\d+\.\s")
+
 # Headings a requirement belongs under when the matching agent gives no usable
 # answer, best first. Substrings of a lowercased heading. Topic mode only.
 _DEFAULT_SECTION_HINTS = (
@@ -300,6 +307,25 @@ def _clone(element):
     return copied
 
 
+def _unlist(element) -> None:
+    """Strip a cloned paragraph's link to its numbered-list instance while
+    keeping the rest of its formatting.
+
+    Used when the only available prototype for a field is another field's
+    own filler: its indentation (`w:ind`) is normally set directly on the
+    paragraph, independent of `w:numPr`, so removing just the numbering
+    reference keeps the look of a list item without reusing a list instance
+    that belongs to a different field -- which would otherwise make this
+    field's points read as a continuation of that field's own numbering.
+    """
+    pPr = element.find(qn("w:pPr"))
+    if pPr is None:
+        return
+    numPr = pPr.find(qn("w:numPr"))
+    if numPr is not None:
+        pPr.remove(numPr)
+
+
 def _remove(element) -> None:
     parent = element.getparent()
     if parent is not None:
@@ -307,7 +333,12 @@ def _remove(element) -> None:
 
 
 def _lines(value: str) -> list[str]:
-    return [line for line in (_clean(l) for l in (value or "").splitlines()) if line]
+    raw = [line for line in (_clean(l) for l in (value or "").splitlines()) if line]
+    if len(raw) == 1:
+        parts = [p.strip() for p in _INLINE_NUMBERED_SPLIT.split(raw[0]) if p.strip()]
+        if len(parts) >= 2 and all(_INLINE_NUMBERED_ITEM.match(p) for p in parts):
+            return parts
+    return raw
 
 
 # --- recognising a story template --------------------------------------------
@@ -454,13 +485,29 @@ def _fill_slot(doc, slot: _Slot, value: str, prototypes) -> None:
         return
 
     listed, plain = prototypes
-    if slot.content and slot.content[0].tag == qn("w:p"):
-        # The slot's own filler: the truest guide to how it should look.
-        proto = slot.content[0]
+    own = (slot.content[0]
+           if slot.content and slot.content[0].tag == qn("w:p") else None)
+    unlist = False
+    if own is not None:
+        # The slot's own filler: the truest guide to how it should look, and
+        # if it carries Word's own list numbering, that numbering is this
+        # field's own instance -- safe to keep and to drop the model's own
+        # "1./2./3." text markers in favour of it.
+        proto, keep_markers = own, False
     elif len(lines) > 1:
+        # No filler of its own to borrow formatting from. Prefer `listed` for
+        # its indentation (it reads as a bulleted field, matching its
+        # siblings), but its w:numPr is a DIFFERENT field's own numbered-list
+        # instance -- cloning it as-is risks that field's numbering carrying
+        # on instead of this one starting at 1. _unlist() keeps the
+        # indentation (set directly on the paragraph) and drops just the
+        # numbering link, so the model's own markers become the only, now
+        # unambiguous, enumeration.
         proto = listed if listed is not None else plain
+        unlist = proto is listed
+        keep_markers = True
     else:
-        proto = plain if plain is not None else listed
+        proto, keep_markers = (plain if plain is not None else listed), False
 
     # No paragraph anywhere to copy the list formatting from: the value goes
     # on the label's own line, which every format can render.
@@ -472,7 +519,10 @@ def _fill_slot(doc, slot: _Slot, value: str, prototypes) -> None:
     anchor = slot.label_el
     for line in lines:
         element = _clone(proto)
-        _set_text(doc, element, _LEADING_MARKER.sub("", line))
+        if unlist:
+            _unlist(element)
+        text = line if keep_markers else _LEADING_MARKER.sub("", line)
+        _set_text(doc, element, text)
         anchor.addnext(element)
         anchor = element
 
@@ -501,13 +551,27 @@ def _append_field(doc, block: _Block, key: str, value: str, prototypes) -> None:
     _set_text(doc, label_el, f"{FIELD_LABELS.get(key, key)}:")
     tail.addnext(label_el)
 
+    # This field has no slot of its own anywhere in the template, so there is
+    # no "this field's own" numbered-list instance to borrow -- only ever
+    # another field's. Same fix as _fill_slot()'s borrowed-prototype path:
+    # keep `listed`'s indentation for a consistent look, but strip its
+    # w:numPr so this field's points don't read as a continuation of a
+    # different field's numbering, and keep the model's own markers instead.
     listed, plain = prototypes
-    first, second = ((listed, plain) if len(lines) > 1 else (plain, listed))
-    proto = first if first is not None else second
+    multi = len(lines) > 1
+    if listed is not None and multi:
+        proto, keep_markers, unlist = listed, True, True
+    elif plain is not None:
+        proto, keep_markers, unlist = plain, multi, False
+    else:
+        proto, keep_markers, unlist = listed, False, False
     anchor = label_el
     for line in lines:
         element = _clone(proto) if proto is not None else _clone(label_proto)
-        _set_text(doc, element, _LEADING_MARKER.sub("", line))
+        if unlist:
+            _unlist(element)
+        text = line if keep_markers else _LEADING_MARKER.sub("", line)
+        _set_text(doc, element, text)
         anchor.addnext(element)
         anchor = element
     block.slots.append(_Slot(label_el=label_el, key=key,
