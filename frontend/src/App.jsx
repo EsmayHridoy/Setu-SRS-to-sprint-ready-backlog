@@ -823,6 +823,7 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
   }
 
   const vettedCount = plan.items.filter((i) => i.vetting_status !== 'PENDING').length;
+  const hasVetted = plan.items.some((i) => i.vetting_status === 'DONE');
   const paused = plan.status === 'CONFIRMED' && !vetting;
 
   return (
@@ -927,8 +928,195 @@ function BusinessPlanCard({ planId, onError, onGrow }) {
               </button>
             </div>
           )}
+          {plan.status === 'DONE' && hasVetted && (
+            <SrsStep
+              planId={planId}
+              srs={plan.srs}
+              onSrs={(srs) => setPlan((p) => ({ ...p, srs }))}
+              onError={onError}
+              onGrow={onGrow}
+            />
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+// The step after vetting: offer to write the vetted stories into the user's
+// own SRS format. Nothing here is required -- "no" leaves the plan exactly as
+// it was, and the answer is remembered only for this render, not stored.
+//
+// Once a format has been uploaded the plan itself carries the SRS state
+// (BusinessPlanDetail.srs), so reloading the chat lands back on the download
+// rather than on the question again.
+function SrsStep({ planId, srs, onSrs, onError, onGrow }) {
+  const [asked, setAsked] = useState(false);
+  const [declined, setDeclined] = useState(false);
+  const [busy, setBusy] = useState('');
+  const fileRef = useRef(null);
+
+  async function run(kind, work) {
+    setBusy(kind);
+    onError('');
+    try {
+      onSrs(await work());
+      onGrow();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function pickFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) run('upload', () => api.business.uploadSrsFormat(planId, file));
+  }
+
+  async function download() {
+    setBusy('download');
+    onError('');
+    try {
+      await api.business.downloadSrs(planId);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const picker = (
+    <input
+      ref={fileRef}
+      type="file"
+      accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      hidden
+      onChange={pickFile}
+    />
+  );
+  const choose = (label) => (
+    <button
+      type="button"
+      className="save-btn"
+      onClick={() => fileRef.current?.click()}
+      disabled={Boolean(busy)}
+    >
+      {busy === 'upload' ? 'Writing your SRS…' : label}
+    </button>
+  );
+
+  // Nothing uploaded yet: ask, then show the picker.
+  if (!srs) {
+    if (declined) {
+      return (
+        <div className="srs-step">
+          <p className="plan-intro muted">
+            No SRS format used. The vetted stories are above.{' '}
+            <button type="button" className="link-btn" onClick={() => setDeclined(false)}>
+              Upload a format after all
+            </button>
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="srs-step">
+        <p className="plan-intro">
+          {asked
+            ? 'Choose your SRS format — a Word .docx. Each vetted story is written into the section of it that fits.'
+            : 'Do you want these written into your own SRS format?'}
+        </p>
+        {picker}
+        <div className="plan-actions">
+          {asked ? (
+            <>
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => setAsked(false)}
+                disabled={Boolean(busy)}
+              >
+                Back
+              </button>
+              {choose('Choose a .docx…')}
+            </>
+          ) : (
+            <>
+              <button type="button" className="ghost-btn" onClick={() => setDeclined(true)}>
+                No, thanks
+              </button>
+              <button type="button" className="save-btn" onClick={() => setAsked(true)}>
+                Yes, upload SRS format
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="srs-step">
+      <div className="srs-head">
+        <PaperclipIcon />
+        <span className="plan-file" title={srs.template_filename}>
+          {srs.template_filename}
+        </span>
+      </div>
+
+      {srs.status === 'READY' ? (
+        <>
+          <p className="plan-intro">
+            Your SRS is ready — {srs.placements.length} vetted{' '}
+            {srs.placements.length === 1 ? 'story' : 'stories'} written into it.
+          </p>
+          {srs.notice && <p className="srs-notice">{srs.notice}</p>}
+          {Boolean(srs.placements.length) && (
+            <ul className="srs-placements">
+              {srs.placements.map((pl) => (
+                <li key={pl.seq_no}>
+                  <span className="srs-seq">Story {pl.seq_no}</span>
+                  <span className="srs-arrow">→</span>
+                  <span className="srs-section">{pl.section}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : srs.status === 'ERROR' ? (
+        <p className="srs-error">{srs.error_message || 'The SRS could not be generated.'}</p>
+      ) : (
+        <p className="plan-intro">
+          This format is saved but has not been written into yet.
+        </p>
+      )}
+
+      {picker}
+      <div className="plan-actions">
+        {choose('Replace format')}
+        {srs.status !== 'READY' && (
+          <button
+            type="button"
+            className="save-btn"
+            onClick={() => run('retry', () => api.business.regenerateSrs(planId))}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'retry' ? 'Writing your SRS…' : 'Try again'}
+          </button>
+        )}
+        {srs.status === 'READY' && (
+          <button
+            type="button"
+            className="save-btn icon-btn"
+            onClick={download}
+            disabled={Boolean(busy)}
+          >
+            <DownloadIcon /> {busy === 'download' ? 'Preparing…' : 'Download SRS'}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1714,6 +1902,13 @@ function StopIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <rect x="4" y="4" width="16" height="16" rx="2" />
+    </svg>
+  );
+}
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3v12M7 11l5 5 5-5M4 20h16" />
     </svg>
   );
 }

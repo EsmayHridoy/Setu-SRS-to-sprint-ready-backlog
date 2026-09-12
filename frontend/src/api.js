@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
 
 const TOKEN_KEY = 'setu_token';
 
@@ -44,6 +44,70 @@ async function request(path, { method = 'GET', body } = {}) {
   }
 
   return data;
+}
+
+// Multipart POST. The browser sets Content-Type (with the boundary) itself,
+// so headers() is asked for no JSON content type.
+async function requestForm(path, form) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: headers(false),
+    body: form,
+  });
+
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!res.ok) {
+    const detail = data?.detail || data?.error || data?.message || text || res.statusText;
+    throw new Error(`${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+  }
+
+  return data;
+}
+
+// Fetches a file the API returns as bytes and hands it to the browser as a
+// download. It cannot be a plain <a href> or window.open: the endpoint needs
+// the Authorization header, which only fetch can set -- so the response is
+// read into a blob and an object URL is clicked instead. `fallbackName` is
+// used when the response has no Content-Disposition filename (or the header
+// is not exposed to this origin).
+async function download(path, fallbackName) {
+  const res = await fetch(`${API_BASE}${path}`, { headers: headers(false) });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let detail = text;
+    try {
+      detail = JSON.parse(text)?.detail || text;
+    } catch {
+      /* keep raw text */
+    }
+    throw new Error(`${res.status}: ${detail || res.statusText}`);
+  }
+
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  const plain = /filename="?([^";]+)"?/i.exec(disposition);
+  const name = utf8 ? decodeURIComponent(utf8[1]) : plain ? plain[1] : fallbackName;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoked on a later tick: Safari cancels the download if the URL goes
+  // away in the same one.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return name;
 }
 
 // Opens an SSE stream. Pass `{ json }` for a JSON body or `{ form }` for
@@ -137,26 +201,10 @@ export const api = {
       body: { content },
     }),
 
-  extractFile: async (file) => {
+  extractFile: (file) => {
     const form = new FormData();
     form.append('file', file);
-    const res = await fetch(`${API_BASE}/api/uploads/extract`, {
-      method: 'POST',
-      headers: headers(false),
-      body: form,
-    });
-    const text = await res.text();
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = text;
-    }
-    if (!res.ok) {
-      const detail = data?.detail || data?.message || text || res.statusText;
-      throw new Error(`${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
-    }
-    return data;
+    return requestForm('/api/uploads/extract', form);
   },
 
   streamMessage: (conversationId, content, handlers = {}, signal) =>
@@ -196,6 +244,18 @@ export const api = {
       request(`/api/business-plans/${id}/discard`, { method: 'POST' }),
     streamVetting: (id, handlers = {}, signal) =>
       streamSSE(`/api/business-plans/${id}/vet/stream`, {}, handlers, signal),
+
+    // The step after vetting: the user's own SRS format (.docx only), which
+    // comes back with every vetted story written into it.
+    uploadSrsFormat: (id, file) => {
+      const form = new FormData();
+      form.append('file', file);
+      return requestForm(`/api/business-plans/${id}/srs`, form);
+    },
+    regenerateSrs: (id) =>
+      request(`/api/business-plans/${id}/srs/regenerate`, { method: 'POST' }),
+    downloadSrs: (id) =>
+      download(`/api/business-plans/${id}/srs/download`, 'srs.docx'),
   },
 
   // Admin

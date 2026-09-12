@@ -16,6 +16,8 @@ paths -- the same rule the agents' own answers follow.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from collections.abc import AsyncIterator
 
@@ -29,10 +31,46 @@ from google.genai import types
 
 from .config import get_settings
 
+log = logging.getLogger("setu")
+
 # What iter_turn yields, as (kind, text) pairs.
 STATUS = "status"  # a progress line for the UI, never stored
 DELTA = "delta"    # a piece of the answer as it's generated (streaming only)
 FINAL = "final"    # the complete answer, exactly once, last
+
+
+def _unescape_literal_newlines(value):
+    """Gemini's JSON output sometimes double-escapes the backslash in a
+    multi-line field, e.g. sends the four characters `\\\\n` where valid JSON
+    needs `\\n` to decode to one real newline. json.loads then hands back a
+    string containing the literal two characters backslash-n instead of an
+    actual newline byte, which renders as a visible "\\n" in the UI. Fix it
+    up after parsing rather than trying to prompt the model out of it.
+    """
+    if isinstance(value, str):
+        return value.replace("\\n", "\n").replace("\\t", "\t")
+    if isinstance(value, list):
+        return [_unescape_literal_newlines(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _unescape_literal_newlines(v) for k, v in value.items()}
+    return value
+
+
+def parse_json(final_text: str, label: str):
+    """An agent's `output_schema` answer as Python data, or None if the model
+    did not produce parseable JSON. `label` names the call in the log.
+
+    Shared by every agent that asks for structured output, so they all treat
+    an unparseable answer the same way: return None and let the caller decide
+    whether that is recoverable.
+    """
+    try:
+        parsed = json.loads(final_text)
+    except (json.JSONDecodeError, TypeError):
+        log.warning("adk_runner: could not parse %s output as JSON: %r",
+                    label, final_text[:500])
+        return None
+    return _unescape_literal_newlines(parsed)
 
 
 def build_model() -> Gemini:

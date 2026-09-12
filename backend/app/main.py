@@ -35,6 +35,7 @@ REQUIRED_TABLES = {
     "users", "roles", "user_roles", "projects", "role_projects",
     "artifacts", "conversations", "messages", "citations",
     "audit_events", "jobs", "business_plans", "business_items",
+    "srs_documents",
 }
 
 
